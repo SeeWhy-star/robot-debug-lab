@@ -1,0 +1,199 @@
+[
+  {
+    "test": "healthy-navigation",
+    "pass": true,
+    "details": {
+      "success": true,
+      "error": 0.1696,
+      "elapsed": 2.27,
+      "target": [
+        8,
+        8
+      ],
+      "pose": {
+        "x": 7.887812614440918,
+        "y": 7.8728461265563965,
+        "theta": 0.847885012626648,
+        "speed": 0.0,
+        "observed": 1792766171.6308775
+      },
+      "message": "Target reached"
+    }
+  },
+  {
+    "test": "topic_mismatch",
+    "pass": true,
+    "details": {
+      "run_id": "478a20e93423",
+      "status": "verified",
+      "diagnosis": {
+        "cause": "topic_mismatch",
+        "summary": "robot_2 的控制器节点确实存在且运行中，max_speed=2.0 正常，问题不在控制器停止或零速。真正的故障是命令话题被错误路由：控制器把速度发布到 /robot_2/orphan_velocity（该话题没有任何订阅者），而真正消费速度的 /robot_2/turtlesim 订阅的是 /robot_2/turtle1/cmd_vel，该话题当前没有发布者（/robot_2/debug_lab_bridge 只是监视器，不是消费者）。因此控制器的命令无人接收，机器人停在 (5.54, 5.54)，采样位移为 0，last_command 为 null，任务超时。对照 robot_1 的 command_topic=turtle1/cmd_vel，其发布/订阅端点闭合，属健康配置。综上判定为 command_topic 配置指向错误话题，而非控制器缺失或速度为零。",
+        "evidence_ids": [
+          "E3",
+          "E5",
+          "E6",
+          "E8",
+          "E9"
+        ],
+        "repair_rationale": "修复思路：把 robot_2 控制器的 command_topic 从 orphan_velocity 改为 turtle1/cmd_vel。由于 command_topic 只在控制器启动时生效，仅改参数不会让已运行实例切换话题，必须重启该控制器后配置才落盘生效；max_speed 支持在线更新，本次无需改动。重启后应复核：/robot_2/turtle1/cmd_vel 出现 controller 发布者且订阅者仍为 turtlesim（debug_lab_bridge 仅为监视），再采样位移应出现非零位移，目标可达。注意仅凭一次任务失败不足以定位原因，本次结论基于话题端点不匹配的实际观测与参数读取，而非基线报错本身。"
+      },
+      "baseline": {
+        "success": false,
+        "error": 3.479,
+        "elapsed": 7.16,
+        "target": [
+          8.0,
+          8.0
+        ],
+        "pose": {
+          "x": 5.539999961853027,
+          "y": 5.539999961853027,
+          "theta": 0.0,
+          "speed": 0.0,
+          "observed": 1792766182.2052977
+        },
+        "message": "Deadline exceeded"
+      },
+      "validation": {
+        "success": true,
+        "error": 0.1669,
+        "elapsed": 2.82,
+        "target": [
+          8.0,
+          8.0
+        ],
+        "pose": {
+          "x": 7.890864372253418,
+          "y": 7.873741149902344,
+          "theta": 0.857995867729187,
+          "speed": 0.0,
+          "observed": 1792766193.724973
+        },
+        "message": "Target reached"
+      },
+      "usage": {
+        "prompt_tokens": 4367,
+        "completion_tokens": 651
+      },
+      "error": null
+    }
+  },
+  {
+    "test": "zero_speed",
+    "pass": true,
+    "details": {
+      "run_id": "9c75032241aa",
+      "status": "verified",
+      "diagnosis": {
+        "cause": "zero_speed",
+        "summary": "robot_2 的控制器与 turtlesim 均在运行，速度话题端点一致，但速度上限被设为 0，导致机器人不动。证据：E5 图显示节点 /robot_2/turtlesim 与 /robot_2/controller 均存在，唯一速度话题 /robot_2/turtle1/cmd_vel 的发布者为 controller，订阅者为 turtlesim 与 debug_lab_bridge（debug_lab_bridge 仅为监视者，turtlesim 为实际消费者），不存在命令话题错接；E6 参数显示 max_speed=0.0，command_topic=\"turtle1/cmd_vel\"（与图中话题一致）；E8 两次采样位移为 0.0、speed 恒为 0，E5 中 last_command linear=0、angular=0，说明控制器输出被 0 速度上限压制。对照 E9，robot_1 同样话题命名与端点结构，但 max_speed=2.0，故 robot_2 的差异点即 max_speed 为 0。结论：不是控制器缺失，也非话题错接，而是 max_speed=0 导致零速。用户请求中\"验证修复\"的实操我无写权限，不能执行；max_speed 支持在线修改，修复后需重新采样位移以验证，本次会话未做修复验证。",
+        "evidence_ids": [
+          "E5",
+          "E6",
+          "E8",
+          "E9"
+        ],
+        "repair_rationale": "修复方式：将 robot_2 控制器参数 max_speed 从 0.0 调整为正数（参考对等机 robot_1 的 2.0），该参数支持在线更新，无需重启控制器即可生效；command_topic=\"turtle1/cmd_vel\" 已与图中实际话题 /robot_2/turtle1/cmd_vel 匹配，无需修改，因此不需要重启控制器。修复后应再次调用 sample_motion 确认位移大于 0 以验证有效性。本会话仅有诊断读取权限，未执行修改与修复验证。"
+      },
+      "baseline": {
+        "success": false,
+        "error": 3.479,
+        "elapsed": 7.11,
+        "target": [
+          8.0,
+          8.0
+        ],
+        "pose": {
+          "x": 5.539999961853027,
+          "y": 5.539999961853027,
+          "theta": 0.7853981256484985,
+          "speed": 0.0,
+          "observed": 1792766204.285374
+        },
+        "message": "Deadline exceeded"
+      },
+      "validation": {
+        "success": true,
+        "error": 0.1765,
+        "elapsed": 2.17,
+        "target": [
+          8.0,
+          8.0
+        ],
+        "pose": {
+          "x": 7.875171184539795,
+          "y": 7.875171184539795,
+          "theta": 0.785398542881012,
+          "speed": 0.0,
+          "observed": 1792766212.8771627
+        },
+        "message": "Target reached"
+      },
+      "usage": {
+        "prompt_tokens": 4440,
+        "completion_tokens": 606
+      },
+      "error": null
+    }
+  },
+  {
+    "test": "controller_stopped",
+    "pass": true,
+    "details": {
+      "run_id": "405ca7c6b389",
+      "status": "verified",
+      "diagnosis": {
+        "cause": "controller_stopped",
+        "summary": "robot_2 未能到达目标，根因是控制器节点缺失（控制器未运行），而非话题路由或速度参数问题。证据：E5（本机）图中只有 /robot_2/turtlesim 一个节点，没有 controller 节点；速度话题 /robot_2/turtle1/cmd_vel 的 publishers 为空数组，即无人发布速度指令，last_command 为 null。E9 两次采样位姿完全一致（5.54, 5.54, theta=0），位移 0.0，说明机器人完全静止，符合“无发布者→无指令→不动”的链条。E6 参数读取返回 available=false，这是因为控制器进程不存在，其 max_speed / command_topic 参数无法读取，不能据此判断为 max_speed=0。对比 E7（robot_1）：其图中有 /robot_1/controller 节点且是 /robot_1/turtle1/cmd_vel 的唯一 publisher，参数 max_speed=2.0、command_topic=turtle1/cmd_vel，说明健康配置应有的形态。E7 只是对照支持性证据。debug_lab_bridge 仅是监视器订阅者，不作为消费者证据；真正的消费者 turtlesim 已在线并在订阅话题，只是收不到任何指令。",
+        "evidence_ids": [
+          "E3",
+          "E5",
+          "E6",
+          "E7",
+          "E9"
+        ],
+        "repair_rationale": "修复方向为：在 robot_2 上启动/恢复 controller 节点（其应作为 /robot_2/turtle1/cmd_vel 的 publisher，参照 peer 配置 command_topic=turtle1/cmd_vel）。由于命令话题在控制器启动时生效，若需修正确认 command_topic 与话题命名空间匹配，必须重启该控制器；max_speed 支持在线更新，但当前参数不可读（E6），需在控制器恢复后再读取确认其非 0。修复后应验证：图中出现 controller 节点并成为 cmd_vel 的 publisher，且采样位移非 0、机器人朝向目标 (8,8) 移动。"
+      },
+      "baseline": {
+        "success": false,
+        "error": 3.479,
+        "elapsed": 2.76,
+        "target": [
+          8.0,
+          8.0
+        ],
+        "pose": {
+          "x": 5.539999961853027,
+          "y": 5.539999961853027,
+          "theta": 0.0,
+          "speed": 0.0,
+          "observed": 1792766218.215551
+        },
+        "message": "action_unavailable"
+      },
+      "validation": {
+        "success": true,
+        "error": 0.1632,
+        "elapsed": 2.16,
+        "target": [
+          8.0,
+          8.0
+        ],
+        "pose": {
+          "x": 7.89306116104126,
+          "y": 7.876690864562988,
+          "theta": 0.8564058542251587,
+          "speed": 0.0,
+          "observed": 1792766232.0184736
+        },
+        "message": "Target reached"
+      },
+      "usage": {
+        "prompt_tokens": 4472,
+        "completion_tokens": 619
+      },
+      "error": null
+    }
+  }
+]

@@ -1,0 +1,38 @@
+[
+  {
+    "test": "reject-mutation-without-token",
+    "pass": true
+  },
+  {
+    "test": "unknown-robot",
+    "pass": true
+  },
+  {
+    "test": "out-of-bounds-goal",
+    "pass": true
+  },
+  {
+    "test": "two-concurrent-runs",
+    "pass": true
+  },
+  {
+    "test": "busy-robot-conflict",
+    "pass": true
+  },
+  {
+    "test": "cancel-accepted",
+    "pass": true
+  },
+  {
+    "test": "cancel-isolated-from-peer",
+    "pass": true
+  },
+  {
+    "test": "locks-released",
+    "pass": true
+  },
+  {
+    "test": "export-preserves-evidence",
+    "pass": true
+  }
+]
