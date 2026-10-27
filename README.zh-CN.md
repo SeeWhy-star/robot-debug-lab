@@ -14,9 +14,11 @@
 - OpenAI-compatible Chat Completions 工具调用；已实际接入 DeepSeek。
 - 独立 Agent 调查、只读工具、证据编号、固定修复白名单、同目标复测。
 - React 调试台：实时轨迹、任务状态、取消、历史记录、JSON 证据导出。
+- 自然语言 Assistant：指定单/双机器人目标，导航失败自动诊断，获准修复后重试同一目标。见 [使用示例](docs/assistant.md)。
+- 有限澄清续接、计划历史和刷新恢复；支持直连模型或 OpenFang 后端，一条命令启动服务。
 - 显式规则模式用于离线基线；模型失败不会自动伪装成 AI 诊断。
 
-**实现边界：** 当前 Assistant 是程序化协调器，不是另一个大模型；两个 Agent 是独立上下文和并发任务，不是两台服务器。当前直接调用模型 API，没有运行或验收 OpenFang。不是自动修改任意代码的系统，也没有接入实体机器人。
+**实现边界：** Assistant 用模型生成单次导航计划，由程序化网关校验和调度；每台机器人拥有独立 Agent 实例与任务上下文，仍在同一服务中运行。支持模型直连与 OpenFang REST 后端，已完成真实导航规划和故障恢复联调。尚无多轮复杂任务规划、任意代码修复或实体机器人接入。配置步骤见 [OpenFang 接入](docs/openfang.md)，结果见 [联调记录](docs/openfang-validation.md)。
 
 ## 启动
 
@@ -35,10 +37,12 @@ npm --prefix web run build
 [ -f .env ] || cp .env.example .env
 chmod 600 .env
 # 在本地编辑 .env 配置模型；不要提交密钥
-bash scripts/start.sh
+bash scripts/start_all.sh
 ```
 
-打开 <http://127.0.0.1:8765>。在启动终端 Ctrl+C 停止。默认关闭原生 TurtleSim 窗口，由网页展示实时 ROS 轨迹；`RDL_NATIVE_GUI=1 bash scripts/start.sh` 可显示原生窗口。
+打开 <http://127.0.0.1:8765>。以后只需执行 `bash scripts/start_all.sh`。选择 OpenFang 后端时会自动启动本机 daemon，或复用已运行的服务；首次安装见 [接入说明](docs/openfang.md)。Ctrl+C 只停止本次启动器创建的服务。日志位于 `.runtime/lab-service.log` 和 `.runtime/openfang-service.log`。默认关闭原生 TurtleSim 窗口；`RDL_NATIVE_GUI=1 bash scripts/start_all.sh` 可显示原生窗口。
+
+直接体验：在顶部输入“让机器人 2 去 (7,6)”，点击“解析并执行任务”，再点击“查看执行结果”。缺少机器人或坐标时可补充信息继续，刷新后能找回计划。任务成功以位置容差验收为准，不要求坐标小数完全相等。
 
 模型配置：`LLM_BASE_URL`（API 根地址，不含 `/chat/completions`）、`LLM_MODEL`、`LLM_API_KEY`。修改后重启。选择服务端支持工具调用的模型。当前项目凭据只在本地 `.env`，前端拿不到模型密钥。
 
@@ -61,7 +65,15 @@ source scripts/env.bash
 .venv/bin/python scripts/acceptance.py
 # 服务启动后执行；并发、取消、权限检查，不调用模型
 .venv/bin/python scripts/acceptance_api.py
+# 自然语言规划验收；会重置仿真并调用模型
+.venv/bin/python scripts/acceptance_assistant.py
+# 只读浏览器冒烟检查
+cd web
+npx playwright install chromium
+npm run test:ui
 ```
+
+当前版本通过 44 项 Python 测试、9 项真实 API 检查、前端构建及桌面/手机浏览器检查，详见 [浏览器验收](docs/ui-qa.md)。真实模型已覆盖三类预设故障；这是小样本功能验收，不代表生产准确率。
 
 结果保存在 `.runtime/`。历史任务存在 SQLite；重启后未完成任务标为 interrupted，不会自动恢复动作。ROS 默认隔离到本机 domain 93，可用 `RDL_DOMAIN_ID` 修改。不要在同一 domain 同时启动多个副本。
 

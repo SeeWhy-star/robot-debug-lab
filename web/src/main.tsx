@@ -23,6 +23,10 @@ type Verdict = {
   message: string;
 };
 type Run = {
+  target?: number[];
+  task_type?: string;
+  plan?: AssistantPlan;
+  backend?: string;
   id: string;
   robot_id: string;
   mode: string;
@@ -40,7 +44,20 @@ type Run = {
   usage: { prompt_tokens: number; completion_tokens: number };
   error?: string;
 };
+type AssistantPlan = {
+  id: string;
+  status: string;
+  message: string;
+  tasks: { robot_id: string; x: number; y: number; auto_repair: boolean }[];
+  usage?: { prompt_tokens: number; completion_tokens: number };
+  run_ids: string[];
+  prompt?: string;
+  auto_repair_ceiling?: boolean;
+  turns?: { role: string; content: string }[];
+};
 type State = {
+  plans?: AssistantPlan[];
+  runtime?: string;
   robots: Robot[];
   runs: Run[];
   model: string;
@@ -51,6 +68,7 @@ type State = {
 const labels: Record<string, string> = {
   queued: "排队",
   reproducing: "复现故障",
+  navigating: "正在导航",
   investigating: "调查中",
   repairing: "执行修复",
   validating: "独立验收",
@@ -72,11 +90,12 @@ const active = (r: Run) =>
   [
     "queued",
     "reproducing",
+    "navigating",
     "investigating",
     "repairing",
     "validating",
   ].includes(r.status);
-function Scene({ robots }: { robots: Robot[] }) {
+function Scene({ robots, runs }: { robots: Robot[]; runs: Run[] }) {
   return (
     <svg
       viewBox="0 0 600 430"
@@ -105,13 +124,17 @@ function Scene({ robots }: { robots: Robot[] }) {
           </text>
         </g>
       ))}
-      <g transform={`translate(${40 + 8 * 47},${395 - 8 * 33})`}>
-        <circle r="20" fill="none" stroke="#d3e885" strokeDasharray="4 4" />
-        <path d="M-7 0H7M0-7V7" stroke="#d3e885" />
-        <text x="26" y="4" fill="#d3e885" fontSize="12">
-          目标 (8, 8)
-        </text>
-      </g>
+      {robots.map((r, i) => {
+        const goal = runs.find((task) => task.robot_id === r.id)?.target || [8, 8];
+        const color = i ? "#aeb9ff" : "#62e0c1";
+        return <g key={r.id + "goal"} transform={`translate(${40 + goal[0] * 47},${395 - goal[1] * 33})`}>
+          <circle r={i ? 19 : 23} fill="none" stroke={color} strokeDasharray="4 4" />
+          <path d="M-7 0H7M0-7V7" stroke={color} />
+          <text x="-10" y={i ? 42 : -30} fill={color} fontSize="10">
+            {r.id.replace("robot_", "R0")} 目标 ({goal[0]}, {goal[1]})
+          </text>
+        </g>;
+      })}
       {robots.map((r, i) => {
         const color = i ? "#aeb9ff" : "#62e0c1";
         const p = r.pose;
@@ -160,6 +183,11 @@ function App() {
     ),
     [repair, setRepair] = useState(true),
     [busy, setBusy] = useState(false),
+    [instruction, setInstruction] = useState(() => localStorage.getItem("rdl.plan") ? "" : "让机器人 2 去 (7, 6)"),
+    [missionRepair, setMissionRepair] = useState(true),
+    [planning, setPlanning] = useState(false),
+    [planId, setPlanId] = useState(() => localStorage.getItem("rdl.plan") || ""),
+    [returnedPlan, setReturnedPlan] = useState<AssistantPlan | null>(null),
     [notice, setNotice] = useState("");
   useEffect(() => {
     const s = new EventSource("/api/events");
@@ -171,6 +199,19 @@ function App() {
     return () => s.close();
   }, []);
   const run = data?.runs.find((r) => r.id === selected) || data?.runs[0];
+  const assistantPlan = data?.plans?.find((p) => p.id === planId) || returnedPlan;
+  const clarifying = assistantPlan?.status === "needs_clarification";
+  function choosePlan(id: string) {
+    setPlanId(id);
+    setReturnedPlan(null);
+    localStorage.setItem("rdl.plan", id);
+    setInstruction("");
+  }
+  function newInstruction(text = "") {
+    choosePlan("");
+    setMissionRepair(true);
+    setInstruction(text);
+  }
   async function post(path: string, body: unknown = {}) {
     if (!data) return;
     setBusy(true);
@@ -205,6 +246,24 @@ function App() {
       auto_repair: repair,
     });
     if (d) setSelected(d.run_ids[0]);
+  }
+  async function executeInstruction() {
+    setPlanning(true);
+    try {
+      const d = await post("/api/assistant/tasks", {
+        prompt: instruction, auto_repair: missionRepair,
+        parent_id: clarifying ? assistantPlan.id : null,
+      });
+      if (d) {
+        setPlanId(d.plan.id);
+        localStorage.setItem("rdl.plan", d.plan.id);
+        setReturnedPlan(d.plan);
+        setInstruction("");
+        if (d.run_ids.length) setSelected(d.run_ids[0]);
+      }
+    } finally {
+      setPlanning(false);
+    }
   }
   const chosen = data?.robots.find((r) => r.id === robot);
   const disabled =
@@ -253,9 +312,11 @@ function App() {
           <div className="environment">
             <span className="pill">● 本地仿真</span>
             <small>
-              {data?.model || "模型连接中"}
+              {data?.model === "default" ? "OpenFang 默认模型" : data?.model || "模型连接中"}
               <br />
               ROS domain {data?.ros_domain || "—"}
+              <br />
+              调度后端：{data?.runtime === "openfang" ? "OpenFang" : "本地直连"}
             </small>
           </div>
         </header>
@@ -287,6 +348,61 @@ function App() {
             </button>
           ))}
         </div>
+        {notice && (
+          <div role="status" className="notice">
+            {notice}
+            <button aria-label="关闭提示" onClick={() => setNotice("")}>×</button>
+          </div>
+        )}
+        <section className="panel command assistant-command">
+          <div className="panel-head">
+            <h2>Assistant 自然语言任务</h2>
+            <span>描述目标 → 自动分派 → 失败诊断 → 验收</span>
+          </div>
+          <div className="task-examples">
+            <button disabled={busy} onClick={() => newInstruction("让机器人 2 去 (7, 6)")}>单机器人示例</button>
+            <button disabled={busy} onClick={() => newInstruction("机器人 1 去 (3, 4)，机器人 2 去 (7, 6)")}>双机器人示例</button>
+            <button disabled={busy} onClick={() => newInstruction()}>新建指令</button>
+          </div>
+          <label htmlFor="plan-history">最近的 Assistant 计划</label>
+          <select id="plan-history" value={planId} disabled={busy} onChange={(e) => choosePlan(e.target.value)}>
+            <option value="">新指令</option>
+            {(data?.plans || []).map((p) => <option value={p.id} key={p.id}>
+              {p.status === "needs_clarification" ? "待补充" : p.status === "dispatched" ? "已分派" : p.status === "continued" ? "已续接" : "未执行"} · {(p.prompt || p.message || p.id).slice(0, 50)}
+            </option>)}
+          </select>
+          {clarifying && <p className="hint clarification-question">{assistantPlan.message}</p>}
+          <label htmlFor="instruction">{clarifying ? "补充信息（保留上文的机器人与要求）" : "告诉机器人去哪里"}</label>
+          <textarea id="instruction" value={instruction} maxLength={2000}
+            onChange={(e) => setInstruction(e.target.value)}
+            placeholder="例如：机器人 1 去 (3, 4)，机器人 2 去 (7, 6)" />
+          <label className="checkbox">
+            <input type="checkbox" checked={missionRepair && !(clarifying && assistantPlan.auto_repair_ceiling === false)}
+              disabled={clarifying && assistantPlan.auto_repair_ceiling === false}
+              onChange={(e) => setMissionRepair(e.target.checked)} />
+            导航失败后，允许执行限定修复并重试原目标
+          </label>
+          <button className="primary" onClick={executeInstruction}
+            disabled={busy || planning || !connected || !data?.ai_configured || !instruction.trim()}>
+            {planning ? "Assistant 正在解析任务…" : clarifying ? "补充并继续" : "解析并执行任务"}
+          </button>
+          <p className="hint">请写明机器人编号和坐标（0.5～10.5）。支持两台机器人并行、每台一个目标。缺少信息时会提示补充，不会移动。下方手动诊断模式不影响此入口。</p>
+          {assistantPlan && <div className="assistant-result" role="status">
+            <b>{assistantPlan.run_ids.length ? "已分派任务" : clarifying ? "请补充指令" : assistantPlan.status === "continued" ? "已由后续补充指令接续" : "计划未执行"}</b>
+            <p>{assistantPlan.message}</p>
+            {!!assistantPlan.turns?.length && <details><summary>查看指令对话</summary>
+              {assistantPlan.turns.map((t, i) => <p key={i}><b>{t.role === "user" ? "你" : "Assistant"}：</b>{t.content}</p>)}
+            </details>}
+            {assistantPlan.tasks.map((task, i) => <p key={task.robot_id}>
+              {task.robot_id} → ({task.x}, {task.y}) · {task.auto_repair ? "允许限定修复" : "仅诊断，不修复"}
+              {assistantPlan.run_ids[i] && <button className="quiet" onClick={() => {
+                setSelected(assistantPlan.run_ids[i]);
+                document.getElementById("investigation")?.scrollIntoView({ behavior: "smooth" });
+              }}>查看执行结果</button>}
+            </p>)}
+            <small>规划 tokens：{(assistantPlan.usage?.prompt_tokens || 0) + (assistantPlan.usage?.completion_tokens || 0)}</small>
+          </div>}
+        </section>
         <div className="workspace">
           <section className="panel scene">
             <div className="panel-head">
@@ -295,7 +411,7 @@ function App() {
                 <i className={connected ? "on" : ""} /> LIVE
               </span>
             </div>
-            <Scene robots={data?.robots || []} />
+            <Scene robots={data?.robots || []} runs={data?.runs || []} />
             <div className="legend">
               <span>
                 <i className="dot mint" /> Robot 01
@@ -303,7 +419,7 @@ function App() {
               <span>
                 <i className="dot purple" /> Robot 02
               </span>
-              <small>轨迹来自真实 TurtleSim /pose 消息</small>
+              <small>实时轨迹 · 虚线圈为各机器人最近任务目标</small>
             </div>
             <div className="fault-box">
               <div>
@@ -346,11 +462,11 @@ function App() {
           </section>
           <section className="panel command">
             <div className="panel-head">
-              <h2>Assistant 调试入口</h2>
+              <h2>手动诊断实验 · 固定目标 (8, 8)</h2>
               <span className="mini">01 → 02</span>
             </div>
-            <label>调查对象</label>
-            <select value={robot} onChange={(e) => setRobot(e.target.value)}>
+            <label htmlFor="diagnostic-robot">调查对象</label>
+            <select id="diagnostic-robot" value={robot} onChange={(e) => setRobot(e.target.value)}>
               <option value="robot_1">Robot 01</option>
               <option value="robot_2">Robot 02</option>
               <option value="all">两台机器人 · 独立上下文并行</option>
@@ -394,7 +510,7 @@ function App() {
               }
               onClick={diagnose}
             >
-              {busy ? "正在提交…" : "开始诊断"} <span>↗</span>
+              {busy ? "正在提交…" : "开始诊断"} <span aria-hidden="true">↗</span>
             </button>
             <button
               className="quiet wide"
@@ -416,12 +532,6 @@ function App() {
             </p>
           </section>
         </div>
-        {notice && (
-          <div role="status" className="notice">
-            {notice}
-            <button onClick={() => setNotice("")}>×</button>
-          </div>
-        )}
         <section id="investigation" className="panel investigation">
           <div className="panel-head">
             <h2>
@@ -434,7 +544,10 @@ function App() {
                 </span>
                 <a href={`/api/runs/${run.id}/export`}>导出 JSON ↗</a>
                 {active(run) && (
-                  <button onClick={() => post(`/api/runs/${run.id}/cancel`)}>
+                  <button disabled={busy} onClick={async () => {
+                    const result = await post(`/api/runs/${run.id}/cancel`);
+                    if (result) setNotice(result.accepted ? "已请求取消，正在停止任务并释放机器人。" : "该任务已结束，无需取消。");
+                  }}>
                     取消任务
                   </button>
                 )}
@@ -480,7 +593,7 @@ function App() {
                 <>
                   <div className="metrics">
                     <div>
-                      <small>原始任务</small>
+                      <small>修复前 · 原始任务</small>
                       <b>
                         {run.baseline
                           ? run.baseline.success
@@ -490,7 +603,7 @@ function App() {
                       </b>
                     </div>
                     <div>
-                      <small>回归误差 · 仿真单位</small>
+                      <small>复测位置误差 · 通过阈值 &lt; 0.22</small>
                       <b>
                         {run.validation
                           ? `${run.validation.error.toFixed(3)}`
@@ -498,7 +611,7 @@ function App() {
                       </b>
                     </div>
                     <div>
-                      <small>模型 tokens</small>
+                      <small>诊断 tokens</small>
                       <b>
                         {run.usage.prompt_tokens + run.usage.completion_tokens}
                       </b>
@@ -508,6 +621,25 @@ function App() {
                       <b>{run.events.length}</b>
                     </div>
                   </div>
+                  <div className="diagnosis" role="status">
+                    <span>本次任务结果 · {run.backend || run.mode}</span>
+                    <p>{run.robot_id} → 目标 ({(run.target || [8, 8]).join(", ")})</p>
+                    <p>{run.status === "verified"
+                      ? run.baseline?.success
+                        ? "原始任务已到达目标，本次验证通过。"
+                        : "修复前未到达 → 已执行修复 → 复测到达目标，验证通过。"
+                      : run.status === "diagnosed"
+                        ? "已完成诊断，未开启自动修复。"
+                        : `当前状态：${labels[run.status] || run.status}，尚未确认任务恢复。`}</p>
+                    <small>{run.baseline?.success
+                      ? "首次执行已通过位置验收，无需修复。"
+                      : "首次执行的失败记录会保留；最终结果请看本栏和时间线中的独立位置验收。"}</small>
+                  </div>
+                  {run.plan && <div className="diagnosis">
+                    <span>Assistant 分派记录</span>
+                    <p>{run.plan.message}</p>
+                    <small>规划用量独立记录，不计入上方诊断 tokens：{(run.plan.usage?.prompt_tokens || 0) + (run.plan.usage?.completion_tokens || 0)}</small>
+                  </div>}
                   {run.diagnosis && (
                     <div className="diagnosis">
                       <span>诊断结论 / {causes[run.diagnosis.cause]}</span>

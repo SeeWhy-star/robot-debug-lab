@@ -4,7 +4,9 @@
 
 ```mermaid
 flowchart LR
-  UI[React 调试台] --> Gateway[Assistant 网关]
+  UI[React 调试台] --> Supervisor[Assistant 模型生成导航计划]
+  Supervisor --> Gateway[网关校验与整批锁定]
+  UI -->|手动诊断| Gateway
   Gateway --> A1[Robot 01 Agent 上下文]
   Gateway --> A2[Robot 02 Agent 上下文]
   A1 --> Tools[只读 ROS 观测工具]
@@ -24,9 +26,9 @@ flowchart LR
 
 ## 状态与控制
 
-任务从 queued → reproducing → investigating → repairing → validating 进入 verified/unresolved；也可能 diagnosed、failed、canceled。重启将未结束任务标记为 interrupted。
+手动诊断从 queued → reproducing → investigating → repairing → validating 进入 verified/unresolved。自然语言任务先执行 navigating，成功直接 verified，失败再 investigating；也可能 diagnosed、failed、canceled。重启将未结束任务和计划标记为 interrupted。
 
-控制器独立运行，不受模型推理延迟影响；ROS Action 支持超时和取消。每次诊断先复现目标 (8,8)；网关的结果检查要求实际 Pose 新鲜且距离小于 0.22。不能凭模型“已修复”或控制器返回成功认定验收通过。
+控制器独立运行，不受模型推理延迟影响；ROS Action 支持超时和取消。手动诊断复现目标 (8,8)，自然语言任务使用校验后的自定义坐标；修复后重放同一目标。网关要求实际 Pose 新鲜且距离小于 0.22，不能凭模型或控制器自报成功认定验收通过。
 
 三个修复动作全部预定义。模型仅提议原因，网关再次检查节点和参数与原因一致，才执行动作。command_topic 启动时生效，需要重建控制器；max_speed 支持动态修改。没有任意 shell、文件写入或任意 ROS 参数修改工具。
 
@@ -34,9 +36,9 @@ SQLite 保存事件、证据、token 用量和验收结果。SSE 推送本地视
 
 ## 模型与 OpenFang
 
-兼容层只实现 OpenAI 风格 `/chat/completions` + function tools。通过 .env 可切换提供相同协议的服务。OpenFang 是后续编排集成方向，当前没有依赖其 SDK 或验证其端点、任务模型和部署流程；不能把“模型端点可配置”宣传为“已完成 OpenFang 集成”。
+默认兼容层实现 OpenAI 风格 `/chat/completions` + function tools。新增 `RDL_AGENT_BACKEND=openfang` 使用官方 REST Agent 创建、消息、删除接口，通过 JSON 消息协议请求本地只读工具。每机器人拥有独立本地实例，每次调查创建新的远端会话。详见 [接入步骤、验证范围与限制](openfang.md)。
 
-后续可把现有工具暴露为 OpenFang 工具适配器，由其管理 Agent 生命周期；保留 ROS 网关的执行边界、互斥锁和独立验收。接入时先验证工具调用和错误语义，再增加契约测试。
+当前适配器已覆盖模拟接口契约测试，并完成 OpenFang 0.6.9 + DeepSeek 的三类故障和单次自然语言导航规划真实验收，见 [记录](openfang-validation.md) 与 [Assistant](assistant.md)。后续可升级原生 MCP 工具接入和多轮任务规划；保留 ROS 网关的执行边界、互斥锁和独立验收。
 
 ## 下一阶段
 

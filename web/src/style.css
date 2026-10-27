@@ -212,6 +212,31 @@ header p {
   grid-template-columns: minmax(0, 1.5fr) minmax(290px, 1fr);
   gap: 22px;
 }
+.assistant-command {
+  margin-bottom: 22px;
+}
+.task-examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 16px 22px 0;
+}
+.clarification-question {
+  padding: 10px 12px;
+  border-left: 2px solid #a5e2c6;
+  color: #c9e9df;
+}
+.assistant-result {
+  margin: 16px 22px 0;
+  padding: 14px 18px;
+  border-left: 2px solid #8acfb8;
+  background: #20373a;
+  font-size: 13px;
+  line-height: 1.8;
+}
+.assistant-result button {
+  margin-left: 12px;
+}
 .panel {
   border: 1px solid #2b3c43;
   border-radius: 13px;
@@ -403,7 +428,10 @@ textarea {
   color: #718b94;
 }
 .notice {
-  margin-top: 20px;
+  position: sticky;
+  top: 12px;
+  z-index: 5;
+  margin: 0 0 20px;
   background: #293f43;
   border: 1px solid #50746d;
   border-radius: 8px;

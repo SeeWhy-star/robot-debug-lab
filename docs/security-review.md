@@ -1,5 +1,19 @@
 # Pre-publication security review / 发布前安全检查
 
+## Update publication check / 本次更新发布检查
+
+2026-10-27：中英文 README、OpenFang 接入、Assistant 和浏览器验收说明已同步。
+
+- 对待发布文件快照和本地 Git 历史执行 Gitleaks 8.30.1 脱敏扫描，均无发现。
+- 对待发布文件执行本地已配置密钥的精确匹配，以及个人主目录路径、机器名和邮箱格式检查；未发现密钥或私人身份信息。邮箱格式命中仅为示例维护者地址与 URL 校验测试数据。
+- `.env`、运行数据库、日志、截图、依赖和构建产物均不在本次提交中。仅保留公共仓库署名及仿真验收样例，不发布本机运行报告。
+- 提交身份沿用仓库的 GitHub noreply 邮箱，不使用私人邮箱。只推送 `main`，不上传本地工具的检查点引用。
+- 44 项 Python 测试与 TypeScript/Vite 构建通过。本次未重新执行依赖漏洞审计；下方漏洞审计结果属于初始发布时的历史记录。
+
+此检查针对本次发布候选内容，不是对所有潜在隐私问题或安全漏洞的保证。
+
+## Initial release review / 初始发布检查
+
 Review date / 检查日期: 2026-10-24 (America/Los_Angeles).
 
 ## Summary / 结论

@@ -104,13 +104,17 @@ class CompatibleModel:
 
 
 class RobotAgent:
-    def __init__(self, bridge, store, model=None):
+    def __init__(self, bridge, store, model=None, robot=None):
         self.bridge = bridge
         self.store = store
         self.model = model or CompatibleModel()
+        self.model_override = model is not None
+        self.robot = config.robot_id(robot) if robot else None
 
     def tool(self, name, r):
         rid = r["robot_id"]
+        if self.robot is not None and rid != self.robot:
+            raise ValueError("Agent robot scope mismatch")
         if name == "inspect_graph":
             data = self.bridge.snapshot(rid)
         elif name == "read_parameters":
@@ -129,6 +133,21 @@ class RobotAgent:
         return self.store.event(r, "tool", name, data)
 
     def diagnose(self, r, cancel):
+        if self.robot is not None and r["robot_id"] != self.robot:
+            raise ValueError("Agent robot scope mismatch")
+        if r["mode"] != "rules" and config.AGENT_BACKEND == "openfang" and not self.model_override:
+            from .openfang import OpenFangModel
+            remote = OpenFangModel(r["robot_id"], r["id"])
+            try:
+                return self._diagnose(r, cancel, remote)
+            finally:
+                try:
+                    remote.close()
+                except ModelError:
+                    self.store.event(r, "warning", "OpenFang 会话清理失败", {"agent_id": remote.agent_id})
+        return self._diagnose(r, cancel, self.model)
+
+    def _diagnose(self, r, cancel, model):
         evidence = {}
 
         def collect(name):
@@ -173,9 +192,10 @@ class RobotAgent:
                 r,
                 "model",
                 "模型选择下一步调查",
-                {"round": step + 1, "model": config.MODEL},
+                {"round": step + 1, "model": config.OPENFANG_MODEL if config.AGENT_BACKEND == "openfang" else config.MODEL,
+                 "backend": config.AGENT_BACKEND},
             )
-            message, usage = self.model.complete(messages, TOOLS)
+            message, usage = model.complete(messages, TOOLS)
             for k in ["prompt_tokens", "completion_tokens"]:
                 r["usage"][k] += int(usage.get(k, 0))
             self.store.save(r)

@@ -14,6 +14,8 @@ Each simulated robot gets an independent diagnostic context. An Assistant gatewa
 - OpenAI-compatible tool calling, exercised with DeepSeek.
 - Read-only investigation tools, evidence references, per-robot locks, and allowlisted repair operations.
 - React dashboard with live trajectories, task cancellation, history, and JSON evidence export.
+- Natural-language single/dual-robot goals, bounded clarification follow-ups, saved plan history, and refresh recovery.
+- Direct model or OpenFang REST backend, with one-command service startup.
 - An explicit offline rules baseline. Model failures never silently fall back to rules and masquerade as AI results.
 
 ## How it works
@@ -31,7 +33,7 @@ flowchart LR
   Replay --> Verdict[Independent pose verification]
 ```
 
-**Scope:** the Assistant is a programmatic coordinator. Agent contexts run concurrently on one machine; this is not a distributed scheduler. The MVP calls a model API directly. OpenFang orchestration, arbitrary source-code repair, Gazebo/Nav2, and physical robots are not integrated or validated. The current dashboard and diagnostic prompts are primarily Chinese; both English and Chinese setup documentation are provided.
+**Scope:** the Assistant generates a navigation plan from natural language and asks for missing information, with up to five user turns. The programmatic gateway validates and dispatches goals to robot-bound Agent instances on one machine. Navigation failure triggers diagnosis and optionally allowlisted repair with same-target replay. Live OpenFang 0.6.9 + DeepSeek tests cover navigation planning and fault recovery; see [Assistant usage](docs/assistant.md), [setup](docs/openfang.md) and [validation](docs/openfang-validation.md). Complex multi-stage planning, arbitrary code repair, Gazebo/Nav2 and physical robots remain future work. The dashboard and diagnostic prompts are primarily Chinese.
 
 ## Quick start
 
@@ -49,10 +51,14 @@ npm --prefix web run build
 [ -f .env ] || cp .env.example .env
 chmod 600 .env
 # Edit .env locally before using AI mode.
-bash scripts/start.sh
+bash scripts/start_all.sh
 ```
 
 Open <http://127.0.0.1:8765>. Stop with Ctrl+C in the server terminal. Native TurtleSim windows are hidden by default; set `RDL_NATIVE_GUI=1` to display them. The browser visualization uses actual ROS pose messages.
+
+For subsequent launches, run `bash scripts/start_all.sh`. It starts the lab and, when configured, local OpenFang; an existing healthy daemon is reused. Ctrl+C stops only services created by this launcher. Logs stay in ignored `.runtime/`.
+
+To enable OpenFang, run `bash scripts/install_openfang.sh` once (Linux x86_64), then set `RDL_AGENT_BACKEND=openfang` in `.env` and restart. Configure your own model credentials below; see [OpenFang setup](docs/openfang.md) for custom endpoints and authentication.
 
 Set these variables in the local `.env` file:
 
@@ -65,6 +71,8 @@ Set these variables in the local `.env` file:
 Restart after configuration changes. The example targets DeepSeek; compatible providers can be substituted. HTTPS is required for remote model endpoints; HTTP is allowed only for loopback model servers. Leave the key empty and select rules mode for offline experiments.
 
 ## Try the debugging loop
+
+For navigation, enter `让机器人 2 去 (7,6)` in the top Assistant panel and click `解析并执行任务`. If information is missing, provide it and click `补充并继续`. Use `查看执行结果` to see the outcome. Plans survive refresh; success means the robot is within the position tolerance, not that floating-point coordinates match exactly.
 
 1. Keep Robot 01 healthy and select Robot 02.
 2. Inject a topic mismatch fault (`速度话题接错`).
@@ -81,9 +89,15 @@ source scripts/env.bash
 .venv/bin/python scripts/acceptance.py
 # Requires a running server; checks concurrency, cancellation and API guards offline.
 .venv/bin/python scripts/acceptance_api.py
+# Natural-language planning checks; calls the configured model and resets simulation.
+.venv/bin/python scripts/acceptance_assistant.py
+# Read-only browser smoke checks after starting the server.
+cd web
+npx playwright install chromium
+npm run test:ui
 ```
 
-The initial real-model acceptance run passed all three fault scenarios. Independent tests cover fabricated evidence rejection, scope restrictions, stale pose rejection, restart persistence, concurrency, and cancellation. These small experiments are **not** a production accuracy benchmark. Committed acceptance samples contain simulation data, not physical robot locations.
+The current release passes 44 Python tests, 9 live API checks, and the frontend production build. Desktop and mobile Chromium checks cover navigation, clarification, refresh recovery, cancellation, bounded repair, and export; see [UI validation](docs/ui-qa.md). Live model acceptance covers all three fault scenarios. These small experiments are **not** a production accuracy benchmark. Committed acceptance samples contain simulation data, not physical robot locations.
 
 Fresh results, process logs, and SQLite history stay in ignored `.runtime/`. Interrupted tasks are marked on restart and do not resume automatically. ROS discovery defaults to localhost on domain 93; override with `RDL_DOMAIN_ID`. Do not run duplicate instances in the same domain.
 

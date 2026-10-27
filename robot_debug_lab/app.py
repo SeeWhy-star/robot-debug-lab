@@ -5,10 +5,12 @@ from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from typing import Literal
-from .config import ROOT, ROBOTS, MODEL, API_KEY, robot_id
+from .config import ROOT, ROBOTS, MODEL, API_KEY, robot_id, AGENT_BACKEND, OPENFANG_MODEL
 from .store import Store
 from .bridge import Bridge
 from .workflow import Workflow
+from .supervisor import Supervisor
+from .agents import ModelError
 
 
 @asynccontextmanager
@@ -17,6 +19,7 @@ async def lifespan(app):
     app.state.bridge = bridge
     app.state.store = Store()
     app.state.workflow = Workflow(bridge, app.state.store)
+    app.state.supervisor = Supervisor(app.state.store)
     app.state.token = secrets.token_urlsafe(32)
     yield
     await asyncio.to_thread(app.state.workflow.close)
@@ -41,6 +44,12 @@ class Diagnose(BaseModel):
 
 class Fault(BaseModel):
     kind: Literal["controller_stopped", "topic_mismatch", "zero_speed"]
+
+
+class AssistantRequest(BaseModel):
+    prompt: str = Field(min_length=1, max_length=2000, pattern=r"\S")
+    auto_repair: bool = True
+    parent_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{12}$")
 
 
 class Target(BaseModel):
@@ -85,11 +94,13 @@ def state():
     return {
         "robots": app.state.bridge.public(),
         "runs": app.state.store.all(),
-        "model": MODEL,
-        "ai_configured": bool(API_KEY),
+        "plans": app.state.store.recent_plans(),
+        "model": OPENFANG_MODEL if AGENT_BACKEND == "openfang" else MODEL,
+        "ai_configured": AGENT_BACKEND == "openfang" or bool(API_KEY),
         "token": app.state.token,
         "ros_domain": os.environ.get("ROS_DOMAIN_ID"),
-        "runtime": "direct-compatible-api",
+        "runtime": AGENT_BACKEND,
+        "agents": [{"robot_id": rid, "busy": app.state.bridge.locks[rid].locked()} for rid in ROBOTS],
     }
 
 
@@ -125,18 +136,51 @@ def navigate(rid: str, t: Target):
 
 @app.post("/api/runs")
 def diagnose(q: Diagnose):
-    if q.mode == "ai" and not API_KEY:
+    if q.mode == "ai" and AGENT_BACKEND == "direct" and not API_KEY:
         raise HTTPException(409, "Configure model credentials first")
     ids = list(dict.fromkeys(q.robots))
     if any(app.state.bridge.locks[r].locked() for r in ids):
         raise HTTPException(409, "Selected robot busy")
-    runs = []
     try:
-        for rid in ids:
-            runs.append(app.state.workflow.submit(rid, q.mode, q.prompt, q.auto_repair))
+        runs = app.state.workflow.submit_many([
+            {"robot_id": rid, "x": 8.0, "y": 8.0, "auto_repair": q.auto_repair} for rid in ids
+        ], q.mode, q.prompt)
     except ValueError as e:
         raise HTTPException(409, str(e))
     return {"run_ids": [r["id"] for r in runs]}
+
+
+@app.post("/api/assistant/tasks")
+def assistant_task(q: AssistantRequest):
+    if AGENT_BACKEND == "direct" and not API_KEY:
+        raise HTTPException(409, "Configure model credentials first")
+    try:
+        plan = app.state.supervisor.plan(q.prompt, q.auto_repair, q.parent_id)
+    except ModelError as e:
+        raise HTTPException(502, str(e))
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    if plan["status"] == "needs_clarification":
+        return {"plan": plan, "run_ids": []}
+    try:
+        runs = app.state.workflow.submit_many(plan["tasks"], "ai", plan["request_text"], plan=plan)
+    except Exception as e:
+        plan["status"] = "rejected"
+        app.state.store.save_plan(plan)
+        if isinstance(e, ValueError):
+            raise HTTPException(409, str(e))
+        raise
+    plan.update(status="dispatched", run_ids=[r["id"] for r in runs])
+    app.state.store.save_plan(plan)
+    return {"plan": plan, "run_ids": plan["run_ids"]}
+
+
+@app.get("/api/assistant/plans/{pid}")
+def get_plan(pid: str):
+    plan = app.state.store.get_plan(pid)
+    if plan is None:
+        raise HTTPException(404, "Plan not found")
+    return plan
 
 
 @app.post("/api/runs/{rid}/cancel")

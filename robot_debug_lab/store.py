@@ -12,6 +12,14 @@ class Store:
         self.db.execute(
             "CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY, body TEXT NOT NULL)"
         )
+        self.db.execute(
+            "CREATE TABLE IF NOT EXISTS plans(id TEXT PRIMARY KEY, body TEXT NOT NULL)"
+        )
+        for pid, body in self.db.execute("SELECT id,body FROM plans").fetchall():
+            plan = json.loads(body)
+            if plan["status"] in {"planning", "ready"}:
+                plan["status"] = "interrupted"
+                self.db.execute("UPDATE plans SET body=? WHERE id=?", (json.dumps(plan), pid))
         # Hardware/process state does not survive restarts; stale jobs must be visible.
         for rid, body in self.db.execute("SELECT id,body FROM runs").fetchall():
             r = json.loads(body)
@@ -76,6 +84,24 @@ class Store:
     def all(self):
         with self.lock:
             rows = self.db.execute(
-                "SELECT body FROM runs ORDER BY rowid DESC LIMIT 100"
+                "SELECT body FROM runs ORDER BY json_extract(body, '$.created') DESC LIMIT 100"
             ).fetchall()
         return [json.loads(x[0]) for x in rows]
+
+    def save_plan(self, plan):
+        with self.lock:
+            self.db.execute("INSERT OR REPLACE INTO plans VALUES (?,?)",
+                            (plan["id"], json.dumps(plan, ensure_ascii=False)))
+            self.db.commit()
+
+    def get_plan(self, pid):
+        with self.lock:
+            row = self.db.execute("SELECT body FROM plans WHERE id=?", (pid,)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def recent_plans(self):
+        with self.lock:
+            rows = self.db.execute(
+                "SELECT body FROM plans ORDER BY json_extract(body, '$.created') DESC LIMIT 30"
+            ).fetchall()
+        return [json.loads(row[0]) for row in rows]
