@@ -1,0 +1,14 @@
+{
+  "id": "nav2-5710",
+  "title": "Nav2 costmap layer publisher: invalid incremental bounds",
+  "issue": "https://github.com/ros-navigation/navigation2/issues/5710",
+  "related_pr": "https://github.com/ros-navigation/navigation2/pull/5748",
+  "upstream_repository": "https://github.com/ros-navigation/navigation2",
+  "commit": "6794f00fb316efc2e9ede468d913021a481f57a1",
+  "archive_sha256": "c9b68723cfd6bb9d5f6b4fcdb1e3a0718cfdc4f8f5a35ebe6a48877f73075c2b",
+  "environment": "Ubuntu 24.04 amd64 / ROS 2 Jazzy",
+  "scope": "Component reproduction using actual upstream C++ sources, ROS publishers/subscribers and ASan/UBSan. Not a full Gazebo reproduction or production deployment.",
+  "editable_file": "nav2_costmap_2d/src/costmap_2d_publisher.cpp",
+  "scenarios": ["valid_raw", "valid_grid", "disabled", "overflow", "empty", "recovery"],
+  "reference_note": "PR 5748 disables publishing for disabled layers. Our separately labeled minimal backport checks that behavior only; it is not a complete fix for coordinate/bounds correctness."
+}

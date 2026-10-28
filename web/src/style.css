@@ -691,7 +691,20 @@ footer span {
     max-height: 360px;
   }
 }
+.source-case { margin-top: 24px; scroll-margin-top: 20px; }
+.source-case-body { padding: 22px; line-height: 1.7; overflow-wrap: anywhere; }
+.source-case-body .diagnosis { margin-top: 0; }
+.source-case-body details { margin-top: 14px; }
+.source-case-body summary { cursor: pointer; color: #aadfce; }
+.source-case-body pre { max-height: 420px; overflow: auto; white-space: pre-wrap; font-size: 12px; }
+.case-table-wrap { overflow-x: auto; }
+.case-table-wrap table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.case-table-wrap th, .case-table-wrap td { padding: 10px 8px; text-align: left; border-bottom: 1px solid #30454c; }
+.case-pass { color: #a9e1cd; }
+.case-fail { color: #f2af9e; }
 @media (max-width: 680px) {
+  .source-case-body { padding: 14px; }
+  .case-table-wrap th, .case-table-wrap td { padding: 8px 4px; font-size: 11px; }
   aside {
     display: none;
   }

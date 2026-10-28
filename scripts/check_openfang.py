@@ -1,6 +1,9 @@
 """Read-only daemon check; does not create agents or call a model."""
+from pathlib import Path
 import sys
 import httpx
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from robot_debug_lab import config
 
 

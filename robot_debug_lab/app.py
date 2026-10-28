@@ -26,7 +26,13 @@ async def lifespan(app):
     await asyncio.to_thread(bridge.close)
 
 
-app = FastAPI(title="Robot Debug Lab", lifespan=lifespan)
+app = FastAPI(
+    title="Robot Debug Lab",
+    lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
 
 
 class Diagnose(BaseModel):
@@ -61,17 +67,32 @@ class Target(BaseModel):
 async def local_guard(request: Request, call_next):
     host = request.headers.get("host", "").split(":")[0]
     if host not in ["127.0.0.1", "localhost", "testserver"]:
-        return JSONResponse({"detail": "Local access only"}, status_code=403)
-    if request.method in ["POST", "PUT", "DELETE", "PATCH"]:
+        response = JSONResponse({"detail": "Local access only"}, status_code=403)
+    elif request.method in ["POST", "PUT", "DELETE", "PATCH"]:
         if not secrets.compare_digest(
             request.headers.get("x-lab-token", ""),
             getattr(app.state, "token", "invalid"),
         ):
-            return JSONResponse(
+            response = JSONResponse(
                 {"detail": "Refresh the local dashboard to authorize this action"},
                 status_code=403,
             )
-    return await call_next(request)
+        else:
+            response = await call_next(request)
+    else:
+        response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
+        "connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; "
+        "form-action 'self'"
+    )
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @contextmanager
@@ -114,6 +135,13 @@ async def events():
     return StreamingResponse(
         stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"}
     )
+
+
+@app.get("/api/source-cases/nav2-5710")
+def source_case():
+    from .source_case import public_summary
+
+    return public_summary()
 
 
 @app.post("/api/robots/{rid}/fault")

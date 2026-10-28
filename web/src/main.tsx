@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./style.css";
+import SourceCase from "./SourceCase";
 type Pose = { x: number; y: number; theta: number; speed: number };
 type Robot = {
   id: string;
@@ -677,6 +678,7 @@ function App() {
             </div>
           </div>
         </section>
+        <SourceCase />
         <footer>
           ROBOT DEBUG LAB{" "}
           <span>仿真中的可验证诊断 · 每台机器人一个 Agent · 独立位置验收</span>
