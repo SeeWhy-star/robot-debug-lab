@@ -70,6 +70,12 @@ A live mission acceptance covers the previous failure phrase `机器人去实体
 
 A separate [live replanning result](docs/replanning-acceptance-results.json) moves the physical crate onto Shelf A's default approach. The first Nav2 attempt fails, OpenFang cites mission and route evidence, selects a server-reviewed Nav2-reachable alternative, and Gazebo independently accepts the retry.
 
+## Development status
+
+**Phase 1 backend is complete:** zero-token atomic routing, tool-grounded ReAct planning, an authoritative semantic scene, ordered multi-step execution, contextual clarification, capability negotiation, observable simulated charging, cancellation, and independent acceptance are implemented. Evidence-grounded recovery from a blocked semantic approach is also working end to end.
+
+**Phase 2 has a runnable baseline:** three distinct ROS/Nav2 failures, AI-versus-rules comparison, and an automated evaluation matrix are present. Broader repeated trials and combined mission failures remain future work, alongside costmap-derived candidate generation, general conditional task graphs, restart resumption, multi-robot operation, and physical manipulation.
+
 ## Real Nav2 source case
 
 The source case pins upstream Navigation2 commit `6794f00fb316efc2e9ede468d913021a481f57a1`. Its isolated harness compiles the actual `nav2_costmap_2d` publisher sources with ASan/UBSan and checks valid raw and grid updates, disabled layers, out-of-range bounds, empty maps, and recovery after invalid input.
