@@ -99,6 +99,43 @@ def test_fault_evaluation_counts_wrong_repairs_tools_and_tokens():
     assert result["prompt_tokens"] == 12
 
 
+def test_mid_mission_evaluation_separates_planning_and_diagnosis_usage():
+    from robot_debug_lab.evaluation import evaluate_mission_run
+
+    run = {
+        "status": "verified",
+        "created": 1.0,
+        "finished": 12.0,
+        "planning_usage": {"prompt_tokens": 100, "completion_tokens": 20},
+        "usage": {"prompt_tokens": 50, "completion_tokens": 10},
+        "events": [
+            {"kind": "tool", "title": "inspect_graph"},
+            {"kind": "tool", "title": "read_parameters"},
+            {"kind": "tool", "title": "list_approach_options"},
+        ],
+        "steps": [
+            {"id": "S1", "status": "completed", "started": 1.0, "finished": 2.0},
+            {
+                "id": "S2", "status": "completed", "started": 2.0, "finished": 10.0,
+                "diagnosis": {"cause": "navigator_inactive"},
+                "repair": {"operation": "resume_nav2_lifecycle"},
+            },
+            {"id": "S3", "status": "completed", "started": 10.0, "finished": 12.0},
+        ],
+    }
+    result = evaluate_mission_run(run, "navigator_inactive", "ai")
+
+    assert result["identified_correctly"] is True
+    assert result["original_mission_restored"] is True
+    assert result["completed_steps_preserved"] == ["S1"]
+    assert result["recovered_step_id"] == "S2"
+    assert result["wrong_repairs"] == 0
+    assert result["diagnostic_tool_calls"] == 2
+    assert result["investigation_and_recovery_seconds"] == 8.0
+    assert result["planning_prompt_tokens"] == 100
+    assert result["diagnosis_prompt_tokens"] == 50
+
+
 def test_nav2_parameter_rewrite_only_changes_exact_scan_inputs():
     from robot_debug_lab.nav2_bridge import rewrite_nav2_params
 

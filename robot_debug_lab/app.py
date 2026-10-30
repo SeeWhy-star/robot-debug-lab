@@ -68,6 +68,10 @@ class Fault(BaseModel):
     kind: Literal["scan_interrupted", "navigator_inactive", "controller_velocity_zero"]
 
 
+class FaultSchedule(Fault):
+    navigation_attempt: int = Field(ge=1, le=8)
+
+
 class Scenario(BaseModel):
     kind: Literal["shelf_a_primary_blocked"]
 
@@ -76,6 +80,7 @@ class AssistantRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=2000, pattern=r"\S")
     auto_repair: bool = True
     parent_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{12}$")
+    recovery_mode: Literal["ai", "rules"] = "ai"
 
 
 class Target(BaseModel):
@@ -196,6 +201,14 @@ def inject(rid: str, f: Fault):
         return app.state.bridge.inject(rid, f.kind)
 
 
+@app.post("/api/robots/{rid}/fault-schedule")
+def schedule_fault(rid: str, value: FaultSchedule):
+    with exclusive(rid):
+        return app.state.bridge.schedule_fault(
+            rid, value.kind, value.navigation_attempt
+        )
+
+
 @app.post("/api/robots/{rid}/reset")
 def reset(rid: str):
     with exclusive(rid):
@@ -253,7 +266,7 @@ def assistant_task(q: AssistantRequest):
     if plan["status"] == "needs_clarification":
         return {"plan": plan, "run_ids": []}
     try:
-        run = app.state.workflow.submit_mission(plan, "ai")
+        run = app.state.workflow.submit_mission(plan, q.recovery_mode)
     except Exception as e:
         plan["status"] = "rejected"
         app.state.store.save_plan(plan)

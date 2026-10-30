@@ -1,0 +1,36 @@
+{
+  "generated_at": 1793343815.0818412,
+  "simulation": "gazebo_nav2",
+  "prompt": "先去实体障碍箱旁边，然后回起点，最后去充电站等待。",
+  "rows": [
+    {
+      "fault": "navigator_inactive",
+      "recovery_mode": "ai",
+      "identified_correctly": true,
+      "original_mission_restored": true,
+      "completed_steps_preserved": [
+        "S1"
+      ],
+      "recovered_step_id": "S2",
+      "wrong_repairs": 0,
+      "repair_operations": [
+        "resume_nav2_lifecycle"
+      ],
+      "diagnostic_tool_calls": 4,
+      "investigation_and_recovery_seconds": 30.587,
+      "planning_prompt_tokens": 19951,
+      "planning_completion_tokens": 1249,
+      "diagnosis_prompt_tokens": 19852,
+      "diagnosis_completion_tokens": 792,
+      "status": "verified",
+      "trial": 1,
+      "run_id": "a59a601410aa",
+      "plan_id": "039b12d147e6",
+      "scheduled_navigation_attempt": 2
+    }
+  ],
+  "all_identified": true,
+  "all_missions_restored": true,
+  "all_preserved_prior_steps": true,
+  "ai_has_no_rules_fallback": true
+}

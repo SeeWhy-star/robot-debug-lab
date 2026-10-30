@@ -91,6 +91,8 @@ class Nav2Bridge:
         self.scan_forwarded_times = deque(maxlen=200)
         self.active_goal = None
         self.scenario = None
+        self.navigation_attempt = 0
+        self.scheduled_fault = None
         self.log_handle = None
         self.sim = None
 
@@ -461,6 +463,41 @@ class Nav2Bridge:
             raise ValueError("不支持的 Nav2 故障类型")
         return {"applied": fault, "robot_id": robot}
 
+    def schedule_fault(self, robot, fault, navigation_attempt):
+        """Arm one real fault for a future navigation call.
+
+        The schedule belongs to the deterministic experiment harness.  It is
+        intentionally absent from snapshot()/parameters(), so diagnostic
+        agents can only observe the ROS/Nav2 state produced when it fires.
+        """
+        self._require_robot(robot)
+        if fault not in {
+            "scan_interrupted", "navigator_inactive", "controller_velocity_zero"
+        }:
+            raise ValueError("不支持的 Nav2 故障类型")
+        if not isinstance(navigation_attempt, int) or not 1 <= navigation_attempt <= 8:
+            raise ValueError("导航触发序号必须在 1 到 8 之间")
+        with self.data_lock:
+            self.navigation_attempt = 0
+            self.scheduled_fault = {
+                "kind": fault, "navigation_attempt": navigation_attempt,
+            }
+        return {
+            "armed": True,
+            "robot_id": robot,
+            "navigation_attempt": navigation_attempt,
+        }
+
+    def _fire_scheduled_fault(self, robot):
+        with self.data_lock:
+            self.navigation_attempt += 1
+            schedule = self.scheduled_fault
+            if not schedule or self.navigation_attempt != schedule["navigation_attempt"]:
+                return
+            self.scheduled_fault = None
+            fault = schedule["kind"]
+        self.inject(robot, fault)
+
     def set_scenario(self, robot, scenario):
         """Apply a fixed Gazebo scenario without exposing shell access to an Agent."""
         self._require_robot(robot)
@@ -501,6 +538,8 @@ class Nav2Bridge:
             self.trace.clear()
             self.pose = None
             self.ground_truth = None
+            self.navigation_attempt = 0
+            self.scheduled_fault = None
         self._start_sim()
         self.scenario = None
         self.controller_defaults = self.controller_config()
@@ -553,6 +592,7 @@ class Nav2Bridge:
 
     def navigate(self, robot, x=0.5, y=0.5, timeout=25.0, cancel=None):
         self._require_robot(robot)
+        self._fire_scheduled_fault(robot)
         start = time.monotonic()
         goal = self.NavigateToPose.Goal()
         goal.pose.header.frame_id = "map"

@@ -420,3 +420,60 @@ def test_distinct_nav2_faults_require_matching_evidence_and_repair(tmp_path, cau
     assert result["diagnosis"]["cause"] == cause
     assert bridge.repairs == [("robot_1", cause)]
     assert bridge.moves == [("robot_1", 2.0, 0.5)] * 2
+
+
+def test_mid_mission_fault_repairs_failed_step_without_replaying_completed_step(tmp_path):
+    class ScheduledControllerFaultBridge(MultiMechanismBridge):
+        def __init__(self):
+            super().__init__(None)
+            self.navigation_attempt = 0
+
+        def navigate(self, robot, x, y, cancel=None):
+            self.navigation_attempt += 1
+            if self.navigation_attempt == 2:
+                self.cause = "controller_velocity_zero"
+            return super().navigate(robot, x, y, cancel)
+
+    bridge = ScheduledControllerFaultBridge()
+    store = Store(tmp_path / "mission-fault.db")
+    flow = Workflow(bridge, store)
+    steps = [
+        {
+            "id": "S1", "action": "navigate", "destination_id": "temporary_crate",
+            "x": 0.55, "y": 0.5, "duration_seconds": None,
+            "description": "先去障碍箱安全接近点", "auto_repair": True,
+            "status": "pending",
+        },
+        {
+            "id": "S2", "action": "return_to_start", "destination_id": "start",
+            "x": -2.0, "y": -0.5, "duration_seconds": None,
+            "description": "返回起点", "auto_repair": True, "status": "pending",
+        },
+        {
+            "id": "S3", "action": "navigate", "destination_id": "charging_station",
+            "x": -4.0, "y": -3.15, "duration_seconds": None,
+            "description": "最后去充电站", "auto_repair": True, "status": "pending",
+        },
+    ]
+    plan = mission_plan(steps)
+    plan.update(backend="model-structured-planning", usage={
+        "prompt_tokens": 123, "completion_tokens": 45,
+    })
+    run_id = flow.submit_mission(plan, mode="rules")["id"]
+    flow.pool.shutdown(wait=True)
+    result = store.get(run_id)
+
+    assert result["status"] == "verified"
+    assert [step["status"] for step in result["steps"]] == ["completed"] * 3
+    assert result["steps"][0].get("diagnosis") is None
+    assert result["steps"][1]["diagnosis"]["cause"] == "controller_velocity_zero"
+    assert result["steps"][1]["repair"]["operation"] == "restore_controller_velocity_limits"
+    assert result["planning_usage"] == {"prompt_tokens": 123, "completion_tokens": 45}
+    assert result["mission_acceptance"]["fault_recovery_count"] == 1
+    assert result["mission_acceptance"]["recovered_step_ids"] == ["S2"]
+    assert bridge.moves == [
+        ("robot_1", 0.55, 0.5),
+        ("robot_1", -2.0, -0.5),
+        ("robot_1", -2.0, -0.5),
+        ("robot_1", -4.0, -3.15),
+    ]

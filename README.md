@@ -48,6 +48,7 @@ Run the live incident acceptance against a running server:
 .venv/bin/python scripts/acceptance_missions.py --reset
 .venv/bin/python scripts/acceptance_replanning.py
 .venv/bin/python scripts/evaluate_fault_matrix.py --mode both
+.venv/bin/python scripts/evaluate_mission_faults.py --fault all --mode both --trials 1
 ```
 
 ## Architecture
@@ -70,11 +71,13 @@ A live mission acceptance covers the previous failure phrase `机器人去实体
 
 A separate [live replanning result](docs/replanning-acceptance-results.json) moves the physical crate onto Shelf A's default approach. The first Nav2 attempt fails, OpenFang cites mission and route evidence, selects a server-reviewed Nav2-reachable alternative, and Gazebo independently accepts the retry.
 
+Faults can also be armed for the Nth real navigation call of an ordered mission without exposing that schedule through Agent tools. In the committed [mid-mission fault result](docs/mission-fault-evaluation-results.json), S1 completes before `bt_navigator` becomes inactive on S2. OpenFang identifies the lifecycle evidence with four read-only tool calls, the gateway applies `resume_nav2_lifecycle`, only S2 is replayed, and S3/S4 then finish. Gazebo accepts the final pose at 0.1018 m error with no wrong repair.
+
 ## Development status
 
 **Phase 1 backend is complete:** zero-token atomic routing, tool-grounded ReAct planning, an authoritative semantic scene, ordered multi-step execution, contextual clarification, capability negotiation, observable simulated charging, cancellation, and independent acceptance are implemented. Evidence-grounded recovery from a blocked semantic approach is also working end to end.
 
-**Phase 2 has a runnable baseline:** three distinct ROS/Nav2 failures, AI-versus-rules comparison, and an automated evaluation matrix are present. Broader repeated trials and combined mission failures remain future work, alongside costmap-derived candidate generation, general conditional task graphs, restart resumption, multi-robot operation, and physical manipulation.
+**Phase 2 has a runnable closed loop:** three distinct ROS/Nav2 failures, AI-versus-rules comparison, and an automated evaluation matrix are present. A system fault can now occur after a complex mission has started; completed steps are preserved, the failed step is repaired and replayed, and later steps continue. One live AI mid-mission run is committed; broader repeated combinations remain future work, alongside costmap-derived candidate generation, general conditional task graphs, restart resumption, multi-robot operation, and physical manipulation.
 
 ## Real Nav2 source case
 

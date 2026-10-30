@@ -117,6 +117,7 @@ class Workflow:
                     target_history=[],
                     plan_version=1,
                     plan_revisions=[],
+                    planning_usage=deepcopy(plan.get("usage") or {}),
                 )
                 self.store.save(r)
                 cancel = threading.Event()
@@ -324,6 +325,12 @@ class Workflow:
                     "final_pose_validation": r.get("validation"),
                     "plan_version": r.get("plan_version", 1),
                     "replan_count": len(r.get("plan_revisions", [])),
+                    "fault_recovery_count": sum(
+                        bool(item.get("repair")) for item in r["steps"]
+                    ),
+                    "recovered_step_ids": [
+                        item["id"] for item in r["steps"] if item.get("repair")
+                    ],
                 }
                 self.store.event(r, "mission_validation", "多步骤任务最终验收通过", r["mission_acceptance"])
         except Canceled:
