@@ -5,7 +5,9 @@ Each investigation gets a fresh remote agent, deleted when investigation ends.
 """
 
 import json
+import re
 import uuid
+from html import unescape
 import httpx
 from . import config
 from .agents import ModelError
@@ -69,16 +71,110 @@ class OpenFangModel:
         data = self.request("POST", f"/api/agents/{self.agent_id}/message", json={
             "message": json.dumps({"messages": messages, "tools": tools}, ensure_ascii=False)
         })
+        stage = "response"
         try:
             content = data["response"].strip()
-            if content.startswith("```json\n") and content.endswith("```"):
-                content = content[8:-3].strip()
-            calls = json.loads(content)["calls"]
+            if content.startswith("```") and content.endswith("```"):
+                first_newline = content.find("\n")
+                if first_newline < 0:
+                    raise ValueError()
+                content = content[first_newline + 1:-3].strip()
+            stage = "json"
+            if "DSML" in content:
+                calls = []
+                invocation_pattern = re.compile(
+                    r'<[^<>]*DSML[^<>]*invoke\s+name="([A-Za-z0-9_]+)"[^>]*>'
+                    r'(.*?)</[^<>]*DSML[^<>]*invoke>',
+                    re.DOTALL,
+                )
+                parameter_pattern = re.compile(
+                    r'<[^<>]*DSML[^<>]*parameter\s+name="([A-Za-z0-9_]+)"[^>]*>'
+                    r'(.*?)</[^<>]*DSML[^<>]*parameter>',
+                    re.DOTALL,
+                )
+                for name, body in invocation_pattern.findall(content):
+                    parameters = parameter_pattern.findall(body)
+                    if len(parameters) == 1 and parameters[0][0] == "arguments":
+                        arguments = json.loads(unescape(parameters[0][1]).strip())
+                    else:
+                        arguments = {}
+                        for parameter_name, raw_value in parameters:
+                            value = unescape(raw_value).strip()
+                            try:
+                                value = json.loads(value)
+                            except ValueError:
+                                # DSML string parameters are often emitted as
+                                # raw text instead of JSON string literals.
+                                pass
+                            arguments[parameter_name] = value
+                    calls.append({"name": name, "arguments": arguments})
+                if not calls:
+                    raise ValueError()
+                envelope = {"calls": calls}
+            else:
+                try:
+                    envelope = json.loads(content)
+                except ValueError:
+                # Some providers prepend reasoning or emit more than one JSON
+                # fragment. Scan complete JSON objects and accept only an
+                # envelope with the gateway's ``calls`` key; strict tool and
+                # argument validation still happens below.
+                    envelope = None
+                    decoder = json.JSONDecoder()
+                    for index, character in enumerate(content):
+                        if character != "{":
+                            continue
+                        try:
+                            candidate, _ = decoder.raw_decode(content[index:])
+                        except ValueError:
+                            continue
+                        if isinstance(candidate, dict) and "calls" in candidate:
+                            envelope = candidate
+                            break
+                    if envelope is None:
+                        raise
+            # Providers occasionally ignore the requested outer ``calls``
+            # envelope while still returning one unambiguous, schema-shaped
+            # gateway request.  Normalize only formats that identify exactly
+            # one allowlisted call.  The regular allowlist and downstream
+            # Pydantic/evidence validation still run after this block.
+            if isinstance(envelope, dict) and "calls" not in envelope:
+                if set(envelope) == {"name", "arguments"}:
+                    envelope = {"calls": [envelope]}
+                elif isinstance(envelope.get("tool_calls"), list):
+                    normalized = []
+                    for item in envelope["tool_calls"]:
+                        function = item.get("function", {}) if isinstance(item, dict) else {}
+                        arguments = function.get("arguments", {})
+                        if isinstance(arguments, str):
+                            arguments = json.loads(arguments)
+                        normalized.append({"name": function.get("name"), "arguments": arguments})
+                    envelope = {"calls": normalized}
+                else:
+                    completion_tools = [
+                        tool["function"] for tool in tools
+                        if tool["function"]["name"].startswith("finish_")
+                    ]
+                    if len(completion_tools) == 1:
+                        completion = completion_tools[0]
+                        schema = completion.get("parameters", {})
+                        required = set(schema.get("required", []))
+                        properties = set(schema.get("properties", {}))
+                        keys = set(envelope)
+                        if required <= keys and (
+                            schema.get("additionalProperties", True) or keys <= properties
+                        ):
+                            envelope = {"calls": [{
+                                "name": completion["name"], "arguments": envelope
+                            }]}
+            calls = envelope["calls"]
+            stage = "calls"
             allowed = {t["function"]["name"] for t in tools}
             if not isinstance(calls, list) or not 1 <= len(calls) <= 5:
                 raise ValueError()
             result = []
             for call in calls:
+                stage = "call"
                 if call["name"] not in allowed or not isinstance(call["arguments"], dict):
                     raise ValueError()
                 result.append({"id": uuid.uuid4().hex, "type": "function", "function": {
@@ -88,7 +184,15 @@ class OpenFangModel:
                      "completion_tokens": int(data.get("output_tokens", 0))}
             return {"role": "assistant", "tool_calls": result}, usage
         except (KeyError, ValueError, TypeError, AttributeError):
-            raise ModelError("OpenFang response must contain valid gateway tool requests") from None
+            shape = ""
+            if stage == "json" and "content" in locals():
+                shape = (
+                    f",length={len(content)},calls={int(chr(34) + 'calls' + chr(34) in content)},"
+                    f"braces={content.count('{')}/{content.count('}')}"
+                )
+            raise ModelError(
+                f"OpenFang response must contain valid gateway tool requests ({stage}{shape})"
+            ) from None
 
     def close(self):
         try:

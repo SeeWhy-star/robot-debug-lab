@@ -1,0 +1,59 @@
+{
+  "date": "2026-10-29",
+  "environment": {
+    "os": "Ubuntu 26.04 amd64",
+    "ros": "ROS 2 Lyrical",
+    "simulation": "Gazebo Sim + TurtleBot3",
+    "navigation": "Nav2",
+    "ai_backend": "OpenFang"
+  },
+  "scenario": {
+    "target": [2.0, 0.5],
+    "fault": "scan_interrupted",
+    "fault_boundary": "/scan -> /scan_faulted for obstacle and collision consumers",
+    "verdict": "fresh Gazebo odometry error < 0.35 m"
+  },
+  "runs": [
+    {
+      "id": "94b0bed81c5f",
+      "mode": "rules",
+      "status": "verified",
+      "baseline_error_m": 3.9545,
+      "validation_error_m": 0.1816,
+      "events": 7,
+      "tokens": 0,
+      "evidence_ids": ["E3", "E4"],
+      "repair_observation": {
+        "raw_scan_hz": 5.5,
+        "nav2_scan_hz": 0.5,
+        "scan_forwarding": true
+      }
+    },
+    {
+      "id": "fa3d0be9356f",
+      "mode": "ai",
+      "backend": "openfang",
+      "status": "verified",
+      "baseline_error_m": 3.8998,
+      "validation_error_m": 0.2536,
+      "events": 11,
+      "tokens": 12132,
+      "evidence_ids": ["E3", "E5", "E6", "E7"],
+      "model_selected_tools": [
+        "measure_topics",
+        "read_parameters",
+        "sample_motion"
+      ],
+      "repair_observation": {
+        "raw_scan_hz": 5.0,
+        "nav2_scan_hz": 0.5,
+        "scan_forwarding": true
+      },
+      "validation_source": "gazebo_odometry"
+    }
+  ],
+  "commands": [
+    ".venv/bin/python scripts/acceptance_nav2.py --mode rules",
+    ".venv/bin/python scripts/acceptance_nav2.py --mode ai"
+  ]
+}

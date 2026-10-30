@@ -1,0 +1,15 @@
+{
+  "generated_at": "2026-10-29",
+  "simulation": "gazebo_nav2",
+  "all_identified": true,
+  "all_restored": true,
+  "ai_has_no_rules_fallback": true,
+  "rows": [
+    {"fault":"scan_interrupted","mode":"rules","identified_correctly":true,"original_task_restored":true,"wrong_repairs":0,"repair_operations":["restore_scan_forwarding"],"tool_calls":2,"investigation_and_recovery_seconds":35.515,"prompt_tokens":0,"completion_tokens":0,"status":"verified","run_id":"7b55beff283b"},
+    {"fault":"navigator_inactive","mode":"rules","identified_correctly":true,"original_task_restored":true,"wrong_repairs":0,"repair_operations":["resume_nav2_lifecycle"],"tool_calls":2,"investigation_and_recovery_seconds":17.115,"prompt_tokens":0,"completion_tokens":0,"status":"verified","run_id":"31b4aece9596"},
+    {"fault":"controller_velocity_zero","mode":"rules","identified_correctly":true,"original_task_restored":true,"wrong_repairs":0,"repair_operations":["restore_controller_velocity_limits"],"tool_calls":2,"investigation_and_recovery_seconds":35.591,"prompt_tokens":0,"completion_tokens":0,"status":"verified","run_id":"e4d390acd7e1"},
+    {"fault":"scan_interrupted","mode":"ai","identified_correctly":true,"original_task_restored":true,"wrong_repairs":0,"repair_operations":["restore_scan_forwarding"],"tool_calls":4,"investigation_and_recovery_seconds":40.731,"prompt_tokens":11581,"completion_tokens":522,"status":"verified","run_id":"3110595e2e83"},
+    {"fault":"navigator_inactive","mode":"ai","identified_correctly":true,"original_task_restored":true,"wrong_repairs":0,"repair_operations":["resume_nav2_lifecycle"],"tool_calls":4,"investigation_and_recovery_seconds":22.904,"prompt_tokens":11777,"completion_tokens":637,"status":"verified","run_id":"30cc2a24f4bf"},
+    {"fault":"controller_velocity_zero","mode":"ai","identified_correctly":true,"original_task_restored":true,"wrong_repairs":0,"repair_operations":["restore_controller_velocity_limits"],"tool_calls":4,"investigation_and_recovery_seconds":42.718,"prompt_tokens":11663,"completion_tokens":855,"status":"verified","run_id":"94696bbd2ed1"}
+  ]
+}

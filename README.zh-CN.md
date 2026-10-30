@@ -2,96 +2,108 @@
 
 [English](README.md) | 简体中文
 
-一个可以运行、观察和复现的 ROS 2 多机器人 AI 调试实验室。
+一个基于 **Gazebo Sim + Nav2 + OpenFang** 的 ROS 2 故障诊断与恢复工作台。机器人在真实导航栈中执行任务；AI 负责选择调查工具、引用现场证据和提出修复原因，程序只允许执行经过新鲜证据核验的白名单动作，最后用 Gazebo 里程计独立验收原任务。
 
-每个机器人拥有独立的诊断上下文，由 Assistant 网关协调任务。Agent 读取真实 ROS 节点、话题、参数和运动状态，用证据提出故障判断；网关执行受限修复，再用实际位置检验原任务是否恢复。无需购买机器人。
+## 核心案例
 
-## 当前能力
+仓库机器人从起点前往货架 A `(2.0, 0.5)`。仓库墙体、5 组货架、货架 A、充电站和障碍箱都存在于 Gazebo 世界文件中；后端语义注册表记录实体中心和经过审核的安全接近点，Nav2 不会把障碍物中心当成目标。只有整句能够被完整识别为一个已知地点或明确坐标时，才走 0 token 的确定性路径；未知、复合或带额外动作的表达交给模型查询场景和机器人能力，不能再把整句话误当成地点名称。
 
-- 两台独立命名空间的 TurtleSim：`robot_1`、`robot_2`。
-- 自定义 ROS 2 Navigate Action；控制器 20 Hz 发布 Twist，模型不参与实时控制。
-- 三类真实故障：控制器进程停止、速度话题配错、速度参数为零。
-- OpenAI-compatible Chat Completions 工具调用；已实际接入 DeepSeek。
-- 独立 Agent 调查、只读工具、证据编号、固定修复白名单、同目标复测。
-- React 调试台：实时轨迹、任务状态、取消、历史记录、JSON 证据导出。
-- 自然语言 Assistant：指定单/双机器人目标，导航失败自动诊断，获准修复后重试同一目标。见 [使用示例](docs/assistant.md)。
-- 有限澄清续接、计划历史和刷新恢复；支持直连模型或 OpenFang 后端，一条命令启动服务。
-- 显式规则模式用于离线基线；模型失败不会自动伪装成 AI 诊断。
+例如“机器人去实体障碍箱回来后去充电”会由 OpenFang 生成并执行“障碍箱安全接近点 → 返回起点 → 充电站 → 明确标注的仿真充电”。“去货架 A 拿货”则会查询能力目录；当前 TurtleBot3 没有抓取技能，因此返回零执行步骤和可用替代方案，不会把拿货偷偷替换成等待或声称完成。用户接受替代方案后，Agent 会结合前后两轮对话重新规划。
 
-**实现边界：** Assistant 用模型生成单次导航计划，由程序化网关校验和调度；每台机器人拥有独立 Agent 实例与任务上下文，仍在同一服务中运行。支持模型直连与 OpenFang REST 后端，已完成真实导航规划和故障恢复联调。尚无多轮复杂任务规划、任意代码修复或实体机器人接入。配置步骤见 [OpenFang 接入](docs/openfang.md)，结果见 [联调记录](docs/openfang-validation.md)。
+故障实验包含三种不同机制：`/scan → /scan_faulted` 中断、Nav2 lifecycle 整组 inactive、controller 前后向速度上限同时为零。AI 看不到注入标签，只能调用只读工具检查 ROS 节点、话题速率、lifecycle 状态、参数和运动状态。网关要求原因与现场证据一致后，才执行对应的白名单修复并重放相同目标。成功与否由 Gazebo 里程计误差 `< 0.35 m` 判定。
 
-## 启动
+本机 2026-10-29 的真实验收结果（摘要见 [验收记录](docs/nav2-acceptance-results.json)）：
 
-已验证环境：Ubuntu 26.04 amd64、ROS 2 Lyrical Desktop、系统 Python 3.14、Node.js 和 npm、uv、colcon。ROS Python 扩展必须使用匹配的系统 Python。本版本使用 Lyrical 的 `turtlesim_msgs`，尚未适配 Humble/Jazzy。
+| 模式 | 结果 | 修复前误差 | 修复后误差 | 事件 | 模型 tokens |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 规则基线 | verified | 3.9545 m | 0.1816 m | 7 | 0 |
+| OpenFang AI | verified | 3.8998 m | 0.2536 m | 11 | 12132 |
+
+规则模式用于证明故障装置和修复链路本身可靠；AI 模式用于证明模型确实参与调查。模型不直接发布速度，也不能执行 shell、任意参数修改或任意代码。
+
+三种故障的 AI 与规则矩阵均已通过，包含识别、任务恢复、错修复、工具调用、耗时和 token 指标，见 [故障评测结果](docs/fault-evaluation-results.json)。
+
+## 系统结构
+
+```mermaid
+flowchart LR
+  UI[React 调试台] --> API[FastAPI 任务网关]
+  API --> Nav2[Nav2 导航任务]
+  Nav2 -->|失败| Agent[OpenFang 诊断 Agent]
+  Agent --> Tools[只读 ROS 工具]
+  Tools --> Evidence[带 E 编号的现场证据]
+  Evidence --> Guard[新鲜证据核验]
+  Guard --> Repair[匹配的白名单恢复]
+  Repair --> Replay[重放同一目标]
+  Replay --> Odom[Gazebo 里程计验收]
+  API --> DB[(SQLite 事件历史)]
+```
+
+网页有四个清晰区域：
+
+1. **自然语言任务**：简单目标走确定性语义表；复杂指令通过真实场景工具形成有序步骤；历史下拉框只用于查看记录。
+2. **运行现场与故障实验**：显示 Gazebo 里程计轨迹、当前活动目标和雷达速率，支持三种机制不同的故障。
+3. **AI 诊断与证据**：对比 AI 和规则基线，查看每次工具调用、证据引用、修复和复测结果。
+4. **真实源码案例**：隔离复现 Nav2 #5710，要求 AI 生成受限 C++ 补丁、重新编译并通过独立测试。
+
+## 安装与启动
+
+已验证环境：Ubuntu 26.04 amd64、ROS 2 Lyrical、系统 Python 3.14、Node.js/npm、uv。
 
 ```bash
-git clone https://github.com/SeeWhy-star/robot-debug-lab.git
-cd robot-debug-lab
-# 初次安装；已有 .venv 时无需重建
 uv venv --system-site-packages --python /usr/bin/python3 .venv
 uv pip install --python .venv/bin/python -r requirements.lock
-bash scripts/build.sh
 npm --prefix web ci
 npm --prefix web run build
-# 仅在没有 .env 时复制，保留已有凭据
 [ -f .env ] || cp .env.example .env
 chmod 600 .env
-# 在本地编辑 .env 配置模型；不要提交密钥
+
+# 一次性安装 Nav2、Gazebo Sim 和 TurtleBot3 依赖
+bash scripts/install_nav2_sim.sh
+bash scripts/check_nav2_sim.sh
+
+# 启动网页、Gazebo/Nav2 和 OpenFang（若 .env 选择 openfang）
 bash scripts/start_all.sh
 ```
 
-打开 <http://127.0.0.1:8765>。以后只需执行 `bash scripts/start_all.sh`。选择 OpenFang 后端时会自动启动本机 daemon，或复用已运行的服务；首次安装见 [接入说明](docs/openfang.md)。Ctrl+C 只停止本次启动器创建的服务。日志位于 `.runtime/lab-service.log` 和 `.runtime/openfang-service.log`。默认关闭原生 TurtleSim 窗口；`RDL_NATIVE_GUI=1 bash scripts/start_all.sh` 可显示原生窗口。
+打开 <http://127.0.0.1:8765>。网页“运行现场”显示的是 **Nav2 实际占据栅格的 2D 导航视图**，不是 3D 渲染图。`Ctrl+C` 会回收本次启动的服务和仿真进程。使用 `RDL_NATIVE_GUI=1 bash scripts/start_all.sh` 可同时查看 Gazebo 原生 3D 世界和 RViz 导航数据。
 
-直接体验：在顶部输入“让机器人 2 去 (7,6)”，点击“解析并执行任务”，再点击“查看执行结果”。缺少机器人或坐标时可补充信息继续，刷新后能找回计划。任务成功以位置容差验收为准，不要求坐标小数完全相等。
+场景真值文件是 [`simulation/worlds/rdl_warehouse.sdf.xacro`](simulation/worlds/rdl_warehouse.sdf.xacro)，Nav2 地图是 [`simulation/maps/rdl_warehouse.yaml`](simulation/maps/rdl_warehouse.yaml)。两者必须同步；地图预览由 `simulation/generate_warehouse_map.py` 生成。
 
-模型配置：`LLM_BASE_URL`（API 根地址，不含 `/chat/completions`）、`LLM_MODEL`、`LLM_API_KEY`。修改后重启。选择服务端支持工具调用的模型。当前项目凭据只在本地 `.env`，前端拿不到模型密钥。
+AI 模式需要在 `.env` 配置直连模型，或设置 `RDL_AGENT_BACKEND=openfang`。OpenFang 首次安装见 [接入说明](docs/openfang.md)。密钥只放本地 `.env`，不要提交。
 
-## 三分钟验收
+## 推荐体验流程
 
-1. 保持 Robot 01 正常，选择 Robot 02，注入“话题不匹配”。
-2. 使用 AI 模式、勾选自动修复，点击开始诊断。原始导航会超时，这是故障复现的一部分。
-3. 查看模型调查过程和证据、修复动作，以及复测的位置误差；状态应为“验证通过”。
-4. 更换为速度为零、控制器停止，分别重复。也可以关闭自动修复，只查看诊断建议。
-5. 离线时切换规则模式；它不调用模型，不作为 AI 效果证明。
+1. 点击“重置”，等待 Robot 01 在线。
+2. 输入“去充电站”，确认走确定性语义表且模型 tokens 为 0。
+3. 输入“机器人去实体障碍箱回来后去充电”，查看 Agent 场景工具和有序步骤，再观察 Gazebo/Nav2 真实执行。
+4. 输入“去货架 A 拿货，然后去充电”，确认系统只提出替代方案，没有分派机器人任务；可继续回复“按第一个替代方案，只去货架 A”。
+5. 点击“注入故障”，确认原始雷达仍有数据，而 Nav2 雷达输入变为 0 Hz。
+6. 选择“模型 AI”，勾选限定修复，点击“开始诊断”，在时间线查看证据、修复和同目标复测。
+7. 切换“规则基线”重复实验，对比事件数、结论和 token 消耗。
 
-AI 调查会发送当前任务文本、仿真节点/话题/参数/位置到配置的模型服务。每轮最多 6 次模型请求、每次最多 5 个工具调用、输出上限 1800 tokens。界面记录服务端返回的 token 用量；未提供费用估算。
+自动验收命令会重置仿真并执行完整故障闭环：
 
-## 验证命令
+```bash
+.venv/bin/python scripts/acceptance_nav2.py --mode rules
+.venv/bin/python scripts/acceptance_nav2.py --mode ai
+.venv/bin/python scripts/acceptance_missions.py --reset
+.venv/bin/python scripts/evaluate_fault_matrix.py --mode both
+```
+
+## 真实 Nav2 源码案例
+
+源码案例固定上游 Navigation2 提交，使用 ASan/UBSan 复现 `nav2_costmap_2d` 越界问题。AI 只能对审核过的 C++ 翻译单元做精确文本替换；每个候选都会重新编译并运行 6 个独立场景。详情与命令见 [英文 README](README.md#real-nav2-source-case) 和网页的“真实源码案例”。
+
+## 验证
 
 ```bash
 source scripts/env.bash
 .venv/bin/python -m pytest -q
-# 服务启动后执行；会重置仿真并调用真实模型
-.venv/bin/python scripts/acceptance.py
-# 服务启动后执行；并发、取消、权限检查，不调用模型
-.venv/bin/python scripts/acceptance_api.py
-# 自然语言规划验收；会重置仿真并调用模型
-.venv/bin/python scripts/acceptance_assistant.py
-# 只读浏览器冒烟检查
-cd web
-npx playwright install chromium
-npm run test:ui
+npm --prefix web run build
+npm --prefix web audit
 ```
 
-当前版本通过 44 项 Python 测试、9 项真实 API 检查、前端构建及桌面/手机浏览器检查，详见 [浏览器验收](docs/ui-qa.md)。真实模型已覆盖三类预设故障；这是小样本功能验收，不代表生产准确率。
+`.runtime/` 保存仿真日志、SQLite 历史和源码案例产物，不会提交。项目是单机仿真研究原型，不代表实体机器人安全系统、生产级调度集群或通用自动修复能力。
 
-结果保存在 `.runtime/`。历史任务存在 SQLite；重启后未完成任务标为 interrupted，不会自动恢复动作。ROS 默认隔离到本机 domain 93，可用 `RDL_DOMAIN_ID` 修改。不要在同一 domain 同时启动多个副本。
-
-## 文件结构
-
-```text
-robot_debug_lab/  FastAPI、Agent、工作流、ROS 桥接、控制器
-ros_ws/src/      自定义 Navigate Action 接口
-web/             React + TypeScript + Vite 调试台
-scripts/         构建、启动、真实验收
-tests/          契约与行为测试
-docs/           架构、验收、项目说明
-```
-
-更多内容：[架构与边界](docs/architecture.md)、[验收记录](docs/validation.md)、[面试项目描述](docs/project-brief.md)。原始代码采用 MIT License，依赖保留各自许可证。
-
-## 隐私与安全
-
-仅用于本机仿真。不要通过公网、隧道或反向代理暴露服务。`.env`、日志、数据库、ROS 构建产物和本地截图不会提交。AI 模式会把任务文本和仿真观测发送到你配置的模型服务；规则模式不调用模型。导出报告前仍应检查是否包含私密任务文本。
-
-请使用自己的 API Key，仅保存在本地 `.env`；不要发到聊天、Issue、截图或提交中。泄露后应在服务商后台撤销并换新。详见 [Security & Privacy](SECURITY.md)。
+更多内容：[架构与边界](docs/architecture.md)、[项目表达](docs/project-brief.md)、[OpenFang](docs/openfang.md)。

@@ -5,9 +5,15 @@ from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from typing import Literal
-from .config import ROOT, ROBOTS, MODEL, API_KEY, robot_id, AGENT_BACKEND, OPENFANG_MODEL
+from .config import (
+    ROOT,
+    MODEL,
+    API_KEY,
+    AGENT_BACKEND,
+    OPENFANG_MODEL,
+    SIM_BACKEND,
+)
 from .store import Store
-from .bridge import Bridge
 from .workflow import Workflow
 from .supervisor import Supervisor
 from .agents import ModelError
@@ -15,11 +21,15 @@ from .agents import ModelError
 
 @asynccontextmanager
 async def lifespan(app):
-    bridge = await asyncio.to_thread(Bridge)
+    from .nav2_bridge import Nav2Bridge
+
+    bridge = await asyncio.to_thread(Nav2Bridge)
     app.state.bridge = bridge
     app.state.store = Store()
     app.state.workflow = Workflow(bridge, app.state.store)
-    app.state.supervisor = Supervisor(app.state.store)
+    app.state.supervisor = Supervisor(
+        app.state.store, robot_state=lambda: bridge.snapshot("robot_1")
+    )
     app.state.token = secrets.token_urlsafe(32)
     yield
     await asyncio.to_thread(app.state.workflow.close)
@@ -36,8 +46,8 @@ app = FastAPI(
 
 
 class Diagnose(BaseModel):
-    robots: list[Literal["robot_1", "robot_2"]] = Field(
-        default=["robot_2"], min_length=1, max_length=2
+    robots: list[str] = Field(
+        default=["robot_1"], min_length=1, max_length=1
     )
     mode: Literal["ai", "rules"] = "ai"
     prompt: str = Field(
@@ -49,7 +59,7 @@ class Diagnose(BaseModel):
 
 
 class Fault(BaseModel):
-    kind: Literal["controller_stopped", "topic_mismatch", "zero_speed"]
+    kind: Literal["scan_interrupted", "navigator_inactive", "controller_velocity_zero"]
 
 
 class AssistantRequest(BaseModel):
@@ -59,8 +69,8 @@ class AssistantRequest(BaseModel):
 
 
 class Target(BaseModel):
-    x: float = Field(default=8, ge=0.5, le=10.5, allow_inf_nan=False)
-    y: float = Field(default=8, ge=0.5, le=10.5, allow_inf_nan=False)
+    x: float = Field(default=2.0, ge=-4.0, le=4.0, allow_inf_nan=False)
+    y: float = Field(default=0.5, ge=-4.0, le=4.0, allow_inf_nan=False)
 
 
 @app.middleware("http")
@@ -97,9 +107,7 @@ async def local_guard(request: Request, call_next):
 
 @contextmanager
 def exclusive(rid):
-    try:
-        robot_id(rid)
-    except ValueError:
+    if rid not in app.state.bridge.locks:
         raise HTTPException(404, "Unknown robot")
     lock = app.state.bridge.locks[rid]
     if not lock.acquire(False):
@@ -112,17 +120,45 @@ def exclusive(rid):
 
 @app.get("/api/state")
 def state():
+    runs = app.state.store.all()
+    active_targets = {
+        run["robot_id"]: run["active_target"]
+        for run in runs
+        if run.get("active_target") is not None
+        and run.get("status") not in {"verified", "unresolved", "failed", "canceled", "diagnosed"}
+    }
     return {
         "robots": app.state.bridge.public(),
-        "runs": app.state.store.all(),
+        "runs": runs,
+        "active_targets": active_targets,
         "plans": app.state.store.recent_plans(),
         "model": OPENFANG_MODEL if AGENT_BACKEND == "openfang" else MODEL,
         "ai_configured": AGENT_BACKEND == "openfang" or bool(API_KEY),
         "token": app.state.token,
         "ros_domain": os.environ.get("ROS_DOMAIN_ID"),
         "runtime": AGENT_BACKEND,
-        "agents": [{"robot_id": rid, "busy": app.state.bridge.locks[rid].locked()} for rid in ROBOTS],
+        "simulation": SIM_BACKEND,
+        "agents": [
+            {"robot_id": rid, "busy": app.state.bridge.locks[rid].locked()}
+            for rid in app.state.bridge.robot_ids
+        ],
     }
+
+
+@app.get("/api/scene/objects")
+def scene_objects():
+    return app.state.supervisor.scene.list_scene_objects()
+
+
+@app.get("/api/scene/objects/{object_id}")
+def scene_object(object_id: str):
+    try:
+        return {
+            **app.state.supervisor.scene.get_object_pose(object_id),
+            "safe_approach": app.state.supervisor.scene.get_safe_approach_pose(object_id)["pose"],
+        }
+    except ValueError as error:
+        raise HTTPException(404, str(error)) from None
 
 
 @app.get("/api/events")
@@ -167,11 +203,15 @@ def diagnose(q: Diagnose):
     if q.mode == "ai" and AGENT_BACKEND == "direct" and not API_KEY:
         raise HTTPException(409, "Configure model credentials first")
     ids = list(dict.fromkeys(q.robots))
+    if any(rid not in app.state.bridge.locks for rid in ids):
+        raise HTTPException(404, "Unknown robot in current simulation")
     if any(app.state.bridge.locks[r].locked() for r in ids):
         raise HTTPException(409, "Selected robot busy")
     try:
+        target = (2.0, 0.5)
         runs = app.state.workflow.submit_many([
-            {"robot_id": rid, "x": 8.0, "y": 8.0, "auto_repair": q.auto_repair} for rid in ids
+            {"robot_id": rid, "x": target[0], "y": target[1], "auto_repair": q.auto_repair}
+            for rid in ids
         ], q.mode, q.prompt)
     except ValueError as e:
         raise HTTPException(409, str(e))
@@ -180,8 +220,6 @@ def diagnose(q: Diagnose):
 
 @app.post("/api/assistant/tasks")
 def assistant_task(q: AssistantRequest):
-    if AGENT_BACKEND == "direct" and not API_KEY:
-        raise HTTPException(409, "Configure model credentials first")
     try:
         plan = app.state.supervisor.plan(q.prompt, q.auto_repair, q.parent_id)
     except ModelError as e:
@@ -191,14 +229,14 @@ def assistant_task(q: AssistantRequest):
     if plan["status"] == "needs_clarification":
         return {"plan": plan, "run_ids": []}
     try:
-        runs = app.state.workflow.submit_many(plan["tasks"], "ai", plan["request_text"], plan=plan)
+        run = app.state.workflow.submit_mission(plan, "ai")
     except Exception as e:
         plan["status"] = "rejected"
         app.state.store.save_plan(plan)
         if isinstance(e, ValueError):
             raise HTTPException(409, str(e))
         raise
-    plan.update(status="dispatched", run_ids=[r["id"] for r in runs])
+    plan.update(status="dispatched", run_ids=[run["id"]])
     app.state.store.save_plan(plan)
     return {"plan": plan, "run_ids": plan["run_ids"]}
 

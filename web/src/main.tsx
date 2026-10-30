@@ -9,6 +9,8 @@ type Robot = {
   trace: number[][];
   controller_alive: boolean;
   busy: boolean;
+  runtime?: string;
+  scan?: { raw_scan_hz: number; nav2_scan_hz: number; scan_forwarding: boolean };
 };
 type Event = {
   id: string;
@@ -44,12 +46,25 @@ type Run = {
   validation?: Verdict;
   usage: { prompt_tokens: number; completion_tokens: number };
   error?: string;
+  active_target?: number[] | null;
+  steps?: MissionStep[];
+};
+type MissionStep = {
+  id: string;
+  action: string;
+  description: string;
+  destination_id?: string;
+  x?: number;
+  y?: number;
+  duration_seconds?: number;
+  auto_repair: boolean;
+  status: string;
 };
 type AssistantPlan = {
   id: string;
   status: string;
   message: string;
-  tasks: { robot_id: string; x: number; y: number; auto_repair: boolean }[];
+  steps?: MissionStep[];
   usage?: { prompt_tokens: number; completion_tokens: number };
   run_ids: string[];
   prompt?: string;
@@ -59,8 +74,10 @@ type AssistantPlan = {
 type State = {
   plans?: AssistantPlan[];
   runtime?: string;
+  simulation?: string;
   robots: Robot[];
   runs: Run[];
+  active_targets?: Record<string, number[]>;
   model: string;
   ai_configured: boolean;
   token: string;
@@ -73,6 +90,9 @@ const labels: Record<string, string> = {
   investigating: "调查中",
   repairing: "执行修复",
   validating: "独立验收",
+  waiting: "等待中",
+  simulated_charging: "仿真充电中",
+  idle: "空闲",
   verified: "验证通过",
   unresolved: "尚未解决",
   failed: "执行失败",
@@ -81,9 +101,9 @@ const labels: Record<string, string> = {
   interrupted: "任务中断",
 };
 const causes: Record<string, string> = {
-  controller_stopped: "控制节点停止",
-  topic_mismatch: "速度话题接错",
-  zero_speed: "速度上限为零",
+  scan_interrupted: "导航雷达数据中断",
+  navigator_inactive: "BT Navigator 生命周期停用",
+  controller_velocity_zero: "Controller 速度配置为零",
   healthy: "状态正常",
   unknown: "证据不足",
 };
@@ -95,13 +115,18 @@ const active = (r: Run) =>
     "investigating",
     "repairing",
     "validating",
+    "waiting",
+    "simulated_charging",
   ].includes(r.status);
-function Scene({ robots, runs }: { robots: Robot[]; runs: Run[] }) {
+function Scene({ robots, activeTargets }: { robots: Robot[]; activeTargets: Record<string, number[]> }) {
+  // Exact transform for the Nav2 map: 10 m × 8 m, origin (-5, -4).
+  const sx = (x: number) => 315 + x * 50;
+  const sy = (y: number) => 225 - y * 50;
   return (
     <svg
-      viewBox="0 0 600 430"
+      viewBox="0 0 600 470"
       role="img"
-      aria-label="两台机器人实时轨迹和目标位置"
+      aria-label="Nav2 实际占据栅格、机器人实时轨迹和目标位置"
     >
       <defs>
         <pattern id="grid" width="40" height="35" patternUnits="userSpaceOnUse">
@@ -113,22 +138,36 @@ function Scene({ robots, runs }: { robots: Robot[]; runs: Run[] }) {
           />
         </pattern>
       </defs>
-      <rect x="40" y="25" width="520" height="370" rx="8" fill="url(#grid)" />
-      <path d="M40 25 V395 H560" fill="none" stroke="#496067" />
-      {[0, 2, 4, 6, 8, 10].map((n) => (
+      <rect x="65" y="25" width="500" height="400" fill="url(#grid)" />
+      <image
+        href="/assets/rdl-warehouse-map.png"
+        x="65"
+        y="25"
+        width="500"
+        height="400"
+        preserveAspectRatio="none"
+      />
+      <path d="M65 25 V425 H565" fill="none" stroke="#628087" />
+      {[-4, -2, 0, 2, 4].map((n) => (
         <g key={n}>
-          <text x={40 + n * 47} y="416" fill="#6d8a91" fontSize="11">
+          <text x={sx(n)} y="447" fill="#6d8a91" fontSize="11">
             {n}
           </text>
-          <text x="15" y={395 - n * 33} fill="#6d8a91" fontSize="11">
+          <text x="15" y={sy(n)} fill="#6d8a91" fontSize="11">
             {n}
           </text>
         </g>
       ))}
+      <g fontSize="10" fontWeight="600">
+        <text x={sx(3.2) - 18} y={sy(.5) - 5} fill="#8fe5d2">实体货架 A</text>
+        <text x={sx(.55) - 25} y={sy(-.5) - 24} fill="#ef9a7f">实体障碍箱</text>
+        <text x={sx(-4.3) - 12} y={sy(-3.15) - 18} fill="#7edba9">充电站</text>
+      </g>
       {robots.map((r, i) => {
-        const goal = runs.find((task) => task.robot_id === r.id)?.target || [8, 8];
+        const goal = activeTargets[r.id];
+        if (!goal) return null;
         const color = i ? "#aeb9ff" : "#62e0c1";
-        return <g key={r.id + "goal"} transform={`translate(${40 + goal[0] * 47},${395 - goal[1] * 33})`}>
+        return <g key={r.id + "goal"} transform={`translate(${sx(goal[0])},${sy(goal[1])})`}>
           <circle r={i ? 19 : 23} fill="none" stroke={color} strokeDasharray="4 4" />
           <path d="M-7 0H7M0-7V7" stroke={color} />
           <text x="-10" y={i ? 42 : -30} fill={color} fontSize="10">
@@ -143,7 +182,7 @@ function Scene({ robots, runs }: { robots: Robot[]; runs: Run[] }) {
           <g key={r.id}>
             <polyline
               points={r.trace
-                .map(([x, y]) => `${40 + x * 47},${395 - y * 33}`)
+                .map(([x, y]) => `${sx(x)},${sy(y)}`)
                 .join(" ")}
               fill="none"
               stroke={color}
@@ -151,7 +190,7 @@ function Scene({ robots, runs }: { robots: Robot[]; runs: Run[] }) {
               opacity=".65"
             />
             {p && (
-              <g transform={`translate(${40 + p.x * 47},${395 - p.y * 33})`}>
+              <g transform={`translate(${sx(p.x)},${sy(p.y)})`}>
                 <circle r="17" fill={color} opacity=".13" />
                 <path
                   d="M12 0L-8 -7L-5 0L-8 7Z"
@@ -166,8 +205,8 @@ function Scene({ robots, runs }: { robots: Robot[]; runs: Run[] }) {
           </g>
         );
       })}
-      <text x="52" y="47" fill="#66848d" fontSize="10">
-        LIVE ROS 2 TELEMETRY · POSITION
+      <text x="76" y="48" fill="#8ba4aa" fontSize="10">
+        LIVE ROS 2 TELEMETRY · ACTUAL NAV2 OCCUPANCY MAP
       </text>
     </svg>
   );
@@ -175,16 +214,16 @@ function Scene({ robots, runs }: { robots: Robot[]; runs: Run[] }) {
 function App() {
   const [data, setData] = useState<State | null>(null),
     [connected, setConnected] = useState(false),
-    [robot, setRobot] = useState("robot_2"),
+    [robot, setRobot] = useState("robot_1"),
     [selected, setSelected] = useState(""),
     [mode, setMode] = useState("ai"),
-    [fault, setFault] = useState("topic_mismatch"),
+    [fault, setFault] = useState("scan_interrupted"),
     [prompt, setPrompt] = useState(
-      "排查为什么无法到达目标点。收集证据，必要时对照另一台机器人，并验证修复效果。",
+      "排查为什么机器人无法到达货架 A。请逐步收集现场证据，并验证修复效果。",
     ),
     [repair, setRepair] = useState(true),
     [busy, setBusy] = useState(false),
-    [instruction, setInstruction] = useState(() => localStorage.getItem("rdl.plan") ? "" : "让机器人 2 去 (7, 6)"),
+    [instruction, setInstruction] = useState(() => localStorage.getItem("rdl.plan") ? "" : "让机器人去货架 A"),
     [missionRepair, setMissionRepair] = useState(true),
     [planning, setPlanning] = useState(false),
     [planId, setPlanId] = useState(() => localStorage.getItem("rdl.plan") || ""),
@@ -199,6 +238,11 @@ function App() {
     s.onerror = () => setConnected(false);
     return () => s.close();
   }, []);
+  useEffect(() => {
+    if (data?.robots.length && !data.robots.some((item) => item.id === robot)) {
+      setRobot(data.robots[0].id);
+    }
+  }, [data, robot, fault]);
   const run = data?.runs.find((r) => r.id === selected) || data?.runs[0];
   const assistantPlan = data?.plans?.find((p) => p.id === planId) || returnedPlan;
   const clarifying = assistantPlan?.status === "needs_clarification";
@@ -241,7 +285,7 @@ function App() {
   }
   async function diagnose() {
     const d = await post("/api/runs", {
-      robots: robot === "all" ? ["robot_1", "robot_2"] : [robot],
+      robots: [robot],
       mode,
       prompt,
       auto_repair: repair,
@@ -270,7 +314,7 @@ function App() {
   const disabled =
     busy ||
     !connected ||
-    (robot === "all" ? data?.robots.some((r) => r.busy) : chosen?.busy);
+    chosen?.busy;
   return (
     <div className="shell">
       <aside>
@@ -294,7 +338,7 @@ function App() {
           <br />
           ROS 2 Lyrical
           <br />
-          <span>双机器人仿真实验</span>
+          <span>Gazebo + Nav2 仿真</span>
         </div>
         <div className="connection">
           <i className={connected ? "on" : ""} />
@@ -361,11 +405,10 @@ function App() {
             <span>描述目标 → 自动分派 → 失败诊断 → 验收</span>
           </div>
           <div className="task-examples">
-            <button disabled={busy} onClick={() => newInstruction("让机器人 2 去 (7, 6)")}>单机器人示例</button>
-            <button disabled={busy} onClick={() => newInstruction("机器人 1 去 (3, 4)，机器人 2 去 (7, 6)")}>双机器人示例</button>
+            <button disabled={busy} onClick={() => newInstruction("让机器人去货架 A")}>导航示例</button>
             <button disabled={busy} onClick={() => newInstruction()}>新建指令</button>
           </div>
-          <label htmlFor="plan-history">最近的 Assistant 计划</label>
+          <label htmlFor="plan-history">指令历史（选择后只查看，不会再次执行）</label>
           <select id="plan-history" value={planId} disabled={busy} onChange={(e) => choosePlan(e.target.value)}>
             <option value="">新指令</option>
             {(data?.plans || []).map((p) => <option value={p.id} key={p.id}>
@@ -376,7 +419,7 @@ function App() {
           <label htmlFor="instruction">{clarifying ? "补充信息（保留上文的机器人与要求）" : "告诉机器人去哪里"}</label>
           <textarea id="instruction" value={instruction} maxLength={2000}
             onChange={(e) => setInstruction(e.target.value)}
-            placeholder="例如：机器人 1 去 (3, 4)，机器人 2 去 (7, 6)" />
+            placeholder="例如：让机器人去货架 A" />
           <label className="checkbox">
             <input type="checkbox" checked={missionRepair && !(clarifying && assistantPlan.auto_repair_ceiling === false)}
               disabled={clarifying && assistantPlan.auto_repair_ceiling === false}
@@ -384,24 +427,25 @@ function App() {
             导航失败后，允许执行限定修复并重试原目标
           </label>
           <button className="primary" onClick={executeInstruction}
-            disabled={busy || planning || !connected || !data?.ai_configured || !instruction.trim()}>
+            disabled={busy || planning || !connected || !instruction.trim()}>
             {planning ? "Assistant 正在解析任务…" : clarifying ? "补充并继续" : "解析并执行任务"}
           </button>
-          <p className="hint">请写明机器人编号和坐标（0.5～10.5）。支持两台机器人并行、每台一个目标。缺少信息时会提示补充，不会移动。下方手动诊断模式不影响此入口。</p>
+          <p className="hint">新指令只有点击上方按钮才会执行；历史下拉框只展示过去的计划。导航失败后，AI 会调查真实 ROS 状态。</p>
           {assistantPlan && <div className="assistant-result" role="status">
             <b>{assistantPlan.run_ids.length ? "已分派任务" : clarifying ? "请补充指令" : assistantPlan.status === "continued" ? "已由后续补充指令接续" : "计划未执行"}</b>
             <p>{assistantPlan.message}</p>
             {!!assistantPlan.turns?.length && <details><summary>查看指令对话</summary>
               {assistantPlan.turns.map((t, i) => <p key={i}><b>{t.role === "user" ? "你" : "Assistant"}：</b>{t.content}</p>)}
             </details>}
-            {assistantPlan.tasks.map((task, i) => <p key={task.robot_id}>
-              {task.robot_id} → ({task.x}, {task.y}) · {task.auto_repair ? "允许限定修复" : "仅诊断，不修复"}
-              {assistantPlan.run_ids[i] && <button className="quiet" onClick={() => {
-                setSelected(assistantPlan.run_ids[i]);
+            {(assistantPlan.steps || []).map((step) => <p key={step.id}>
+              {step.id} · {step.description}
+              {step.x !== undefined && step.y !== undefined ? ` → (${step.x}, ${step.y})` : ""}
+              {assistantPlan.run_ids[0] && <button className="quiet" onClick={() => {
+                setSelected(assistantPlan.run_ids[0]);
                 document.getElementById("investigation")?.scrollIntoView({ behavior: "smooth" });
               }}>查看执行结果</button>}
             </p>)}
-            <small>规划 tokens：{(assistantPlan.usage?.prompt_tokens || 0) + (assistantPlan.usage?.completion_tokens || 0)}</small>
+            <small>规划后端：{(assistantPlan.usage?.prompt_tokens || 0) + (assistantPlan.usage?.completion_tokens || 0) === 0 ? "确定性解析（未调用模型）" : "模型结构化规划"} · tokens：{(assistantPlan.usage?.prompt_tokens || 0) + (assistantPlan.usage?.completion_tokens || 0)}</small>
           </div>}
         </section>
         <div className="workspace">
@@ -412,15 +456,12 @@ function App() {
                 <i className={connected ? "on" : ""} /> LIVE
               </span>
             </div>
-            <Scene robots={data?.robots || []} runs={data?.runs || []} />
+            <Scene robots={data?.robots || []} activeTargets={data?.active_targets || {}} />
             <div className="legend">
               <span>
                 <i className="dot mint" /> Robot 01
               </span>
-              <span>
-                <i className="dot purple" /> Robot 02
-              </span>
-              <small>实时轨迹 · 虚线圈为各机器人最近任务目标</small>
+              <small>Gazebo 里程计轨迹 · 虚线圈仅表示当前执行目标，历史目标不显示</small>
             </div>
             <div className="fault-box">
               <div>
@@ -433,7 +474,7 @@ function App() {
                 onChange={(e) => setFault(e.target.value)}
               >
                 {Object.entries(causes)
-                  .slice(0, 3)
+                  .filter(([key]) => !["healthy", "unknown"].includes(key))
                   .map(([k, v]) => (
                     <option value={k} key={k}>
                       {v}
@@ -441,7 +482,7 @@ function App() {
                   ))}
               </select>
               <button
-                disabled={disabled || robot === "all"}
+                disabled={disabled}
                 onClick={async () => {
                   if (await post(`/api/robots/${robot}/fault`, { kind: fault }))
                     setNotice("已注入故障。点击「开始诊断」运行完整闭环。");
@@ -451,7 +492,7 @@ function App() {
               </button>
               <button
                 className="quiet"
-                disabled={disabled || robot === "all"}
+                disabled={disabled}
                 onClick={async () => {
                   if (await post(`/api/robots/${robot}/reset`))
                     setNotice("已恢复默认配置与起点。");
@@ -463,14 +504,12 @@ function App() {
           </section>
           <section className="panel command">
             <div className="panel-head">
-              <h2>手动诊断实验 · 固定目标 (8, 8)</h2>
-              <span className="mini">01 → 02</span>
+              <h2>故障诊断实验 · 目标货架 A (2, 0.5)</h2>
+              <span className="mini">失败 → 调查 → 修复 → 重放</span>
             </div>
             <label htmlFor="diagnostic-robot">调查对象</label>
             <select id="diagnostic-robot" value={robot} onChange={(e) => setRobot(e.target.value)}>
-              <option value="robot_1">Robot 01</option>
-              <option value="robot_2">Robot 02</option>
-              <option value="all">两台机器人 · 独立上下文并行</option>
+              {(data?.robots || []).map((item) => <option value={item.id} key={item.id}>{item.id.replace("robot_", "Robot 0")}</option>)}
             </select>
             <label>诊断模式</label>
             <div className="segmented">
@@ -515,7 +554,7 @@ function App() {
             </button>
             <button
               className="quiet wide"
-              disabled={disabled || robot === "all"}
+              disabled={disabled}
               onClick={async () => {
                 const d = await post(`/api/robots/${robot}/navigate`);
                 if (d)
@@ -604,7 +643,7 @@ function App() {
                       </b>
                     </div>
                     <div>
-                      <small>复测位置误差 · 通过阈值 &lt; 0.22</small>
+                      <small>Gazebo 独立位置误差 · 通过阈值 &lt; 0.35</small>
                       <b>
                         {run.validation
                           ? `${run.validation.error.toFixed(3)}`
@@ -624,7 +663,7 @@ function App() {
                   </div>
                   <div className="diagnosis" role="status">
                     <span>本次任务结果 · {run.backend || run.mode}</span>
-                    <p>{run.robot_id} → 目标 ({(run.target || [8, 8]).join(", ")})</p>
+                    <p>{run.robot_id} → 目标 ({(run.target || [2, 0.5]).join(", ")})</p>
                     <p>{run.status === "verified"
                       ? run.baseline?.success
                         ? "原始任务已到达目标，本次验证通过。"
@@ -681,7 +720,7 @@ function App() {
         <SourceCase />
         <footer>
           ROBOT DEBUG LAB{" "}
-          <span>仿真中的可验证诊断 · 每台机器人一个 Agent · 独立位置验收</span>
+          <span>Gazebo 现场 · Nav2 导航 · AI 调查 · 受限修复 · 独立验收</span>
         </footer>
       </main>
     </div>

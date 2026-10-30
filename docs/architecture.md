@@ -1,51 +1,34 @@
-# Architecture
+# 架构与边界
 
-## 调试闭环
+## 一条主链路
 
-```mermaid
-flowchart LR
-  UI[React 调试台] --> Supervisor[Assistant 模型生成导航计划]
-  Supervisor --> Gateway[网关校验与整批锁定]
-  UI -->|手动诊断| Gateway
-  Gateway --> A1[Robot 01 Agent 上下文]
-  Gateway --> A2[Robot 02 Agent 上下文]
-  A1 --> Tools[只读 ROS 观测工具]
-  A2 --> Tools
-  Tools --> ROS[节点 / 话题 / 参数 / Pose]
-  A1 --> Diagnosis[带证据的诊断]
-  A2 --> Diagnosis
-  Diagnosis --> Guard[新鲜观测核验 + 修复白名单]
-  Guard --> Repair[启动控制器 / 重建发布器 / 设置速度]
-  Repair --> Action[重放原 Navigate Action]
-  Action --> Verdict[独立 Pose 误差验收]
-  Gateway --> DB[(SQLite 事件记录)]
-  DB --> UI
-```
+系统只运行 Gazebo + Nav2，不再维护 TurtleSim 控制器和自定义导航 Action。
 
-网关为每个机器人持有互斥锁，同一机器人不能同时运行注入、导航和诊断；不同机器人可以并行。Agent 不接收注入的故障标签，只有真实观测与用户描述。每次调查使用新的消息上下文，工具的机器人范围由服务端绑定。inspect_peer 只读对照机器人。
+1. FastAPI 启动仓库内置的 Gazebo 世界、TurtleBot3 和 Nav2；Nav2 加载与世界碰撞体对应的占据栅格。
+2. 网关让 AMCL 保持读取原始 `/scan`，把障碍物层和碰撞监控改到 `/scan_faulted`，并受控转发 Gazebo 的雷达数据。
+3. 导航目标失败后，Agent 只能读取节点图、雷达速率、lifecycle 状态、参数和运动采样。
+4. 模型必须通过 `finish_diagnosis` 返回固定结构，并引用本次任务真实存在的事件编号。
+5. 网关重新读取现场；只有新鲜证据仍支持同一原因时，才执行匹配的白名单恢复：恢复雷达转发、恢复 lifecycle manager，或恢复 controller 速度参数。
+6. 系统重放完全相同的 Nav2 目标，用 Gazebo `/odom` 转换到地图坐标后独立验收。
 
-## 状态与控制
+网页“运行现场”是 Nav2 实际占据栅格上的 2D 遥测视图。Gazebo 原生窗口负责 3D 渲染，RViz 负责展示地图、代价地图、激光和路径。三者共享同一套世界坐标，网页不另外发明货架位置。
 
-手动诊断从 queued → reproducing → investigating → repairing → validating 进入 verified/unresolved。自然语言任务先执行 navigating，成功直接 verified，失败再 investigating；也可能 diagnosed、failed、canceled。重启将未结束任务和计划标记为 interrupted。
+## AI 与确定性程序的分工
 
-控制器独立运行，不受模型推理延迟影响；ROS Action 支持超时和取消。手动诊断复现目标 (8,8)，自然语言任务使用校验后的自定义坐标；修复后重放同一目标。网关要求实际 Pose 新鲜且距离小于 0.22，不能凭模型或控制器自报成功认定验收通过。
+只有完整匹配一个已知地点或明确坐标的原子指令才由确定性解析器处理。解析器无法完整消费的请求全部进入模型，不使用“然后、回来后、检查”等连接词列表判断复杂度。复杂任务中，AI 通过 `list_scene_objects`、`resolve_destination`、`get_object_pose`、`get_safe_approach_pose`、`get_robot_state` 和 `list_robot_capabilities` 查询现场并输出最多 8 个结构化步骤。程序把对象 ID 绑定到注册表中的安全接近点，逐步执行 `navigate / wait / return_to_start / enter_idle / simulate_charge`。
 
-三个修复动作全部预定义。模型仅提议原因，网关再次检查节点和参数与原因一致，才执行动作。command_topic 启动时生效，需要重建控制器；max_speed 支持动态修改。没有任意 shell、文件写入或任意 ROS 参数修改工具。
+机器人能力目录是有限的，用户表达不需要穷举。模型识别到取货、存货或其他当前无法执行的意图时，必须返回零步骤、说明能力缺口并提出只由现有能力组成的替代方案。补充回复会携带完整澄清历史重新进入 Agent。模型输出经过OpenFang协议适配、工具白名单和Pydantic Schema校验；协议包装或字段错误可以反馈给同一Agent自修正，不能降级为规则计划。
 
-SQLite 保存事件、证据、token 用量和验收结果。SSE 推送本地视图；未实现多用户、租户权限、跨机器队列和任务租约。进程监督器监控服务父进程，服务退出后回收仿真子进程；ROS 桥接禁用全局信号处理，退出由 Web 服务负责。
+AI 还负责开放式故障调查：决定先看节点、参数、雷达速率还是运动状态，并把多条证据组织成原因。程序负责边界：目标范围、机器人锁、工具作用域、调用次数、证据 ID、修复白名单和最终位置阈值。
 
-## 模型与 OpenFang
+规则基线执行同一工作流，用三组互不相同的固定条件判断雷达链路、lifecycle 和 controller 配置故障。它用于控制变量，不冒充 AI 结果。
 
-默认兼容层实现 OpenAI 风格 `/chat/completions` + function tools。新增 `RDL_AGENT_BACKEND=openfang` 使用官方 REST Agent 创建、消息、删除接口，通过 JSON 消息协议请求本地只读工具。每机器人拥有独立本地实例，每次调查创建新的远端会话。详见 [接入步骤、验证范围与限制](openfang.md)。
+## 运行状态
 
-当前适配器已覆盖模拟接口契约测试，并完成 OpenFang 0.6.9 + DeepSeek 的三类故障和单次自然语言导航规划真实验收，见 [记录](openfang-validation.md) 与 [Assistant](assistant.md)。后续可升级原生 MCP 工具接入和多轮任务规划；保留 ROS 网关的执行边界、互斥锁和独立验收。
+诊断任务依次经过 `reproducing → investigating → repairing → validating → verified/unresolved`。多步骤任务为每一步记录开始、完成、失败原因与取消状态，并在最终验收后进入 `verified`。网页只显示后端明确标记的活动目标；拒绝、澄清和历史计划不会继续显示成当前目标。
 
-## 下一阶段
+## 安全边界
 
-1. 从 TurtleSim 升级到 Gazebo + Nav2，加入 TF、QoS、生命周期等真实故障。
-2. 为每个 Agent 提供独立进程、心跳和任务租约，支持跨主机机器人。
-3. 引入运行日志检索、ROS 教程知识检索；当前尚未把教程接入 RAG。
-4. 代码修复只在隔离工作区生成补丁，并要求测试验证及用户审阅。
-5. 实体机器人接入需另设硬件急停、速度/区域限制和设备身份；本项目的浏览器取消按钮不是硬件急停。
+Agent 没有 shell、文件写入、故障注入和任意 ROS 参数工具。模型提出的原因不会直接触发动作；程序会用新鲜现场数据再次判断。网页只监听回环地址并使用会话令牌限制写操作。
 
-本地 Host + 会话令牌用于限制浏览器误调用，不构成多用户认证。默认仅监听 127.0.0.1，不应直接暴露到公网。
+项目当前是一台仿真机器人、三种可控 Nav2/ROS 故障和单机 OpenFang 会话。实体机器人需要另行加入硬件急停、速度/区域约束、设备身份和人工审批。

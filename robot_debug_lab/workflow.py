@@ -9,7 +9,8 @@ class Workflow:
     def __init__(self, bridge, store):
         self.bridge = bridge
         self.store = store
-        self.agents = {rid: RobotAgent(bridge, store, robot=rid) for rid in ROBOTS}
+        robot_ids = tuple(getattr(bridge, "robot_ids", bridge.locks.keys()))
+        self.agents = {rid: RobotAgent(bridge, store, robot=rid) for rid in robot_ids}
         self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
         self.cancel_events = {}
         self.dispatch_lock = threading.Lock()
@@ -17,13 +18,15 @@ class Workflow:
 
     def submit(self, rid, mode, prompt, repair=True):
         return self.submit_many([
-            {"robot_id": robot_id(rid), "x": 8.0, "y": 8.0, "auto_repair": repair}
+            {"robot_id": robot_id(rid), "x": 2.0, "y": 0.5, "auto_repair": repair}
         ], mode, prompt)[0]
 
     def submit_many(self, tasks, mode, prompt, plan=None):
         tasks = [NavigationTask.model_validate(t) for t in tasks]
         ids = [t.robot_id for t in tasks]
-        if not 1 <= len(tasks) <= 2 or len(set(ids)) != len(ids):
+        if any(rid not in self.bridge.locks for rid in ids):
+            raise ValueError("任务包含当前仿真中不存在的机器人")
+        if len(tasks) != 1 or len(set(ids)) != len(ids):
             raise ValueError("每台机器人只能有一个目标")
         acquired, runs = [], []
         gate = threading.Event()
@@ -77,6 +80,184 @@ class Workflow:
                 raise
             finally:
                 gate.set()
+
+    def submit_mission(self, plan, mode="ai"):
+        """Schedule one ordered mission while holding the robot reservation."""
+        steps = deepcopy(plan.get("steps") or [])
+        if not steps or len(steps) > 8:
+            raise ValueError("任务必须包含 1 到 8 个步骤")
+        for step in steps:
+            if step.get("action") not in {
+                "navigate", "wait", "return_to_start", "enter_idle", "simulate_charge"
+            }:
+                raise ValueError("任务包含不支持的步骤")
+            if step.get("action") in {"navigate", "return_to_start"}:
+                NavigationTask.model_validate({
+                    "robot_id": "robot_1", "x": step.get("x"), "y": step.get("y"),
+                    "auto_repair": bool(step.get("auto_repair")),
+                })
+        with self.dispatch_lock:
+            if self.closed:
+                raise ValueError("服务正在关闭")
+            lock = self.bridge.locks["robot_1"]
+            if not lock.acquire(False):
+                raise ValueError("robot_1 正在执行任务，请等待或取消后重试")
+            try:
+                r = self.store.new("robot_1", mode, plan["request_text"])
+                r.update(
+                    backend=plan.get("backend", AGENT_BACKEND),
+                    planner_backend=plan.get("backend", AGENT_BACKEND),
+                    task_type="mission",
+                    plan=deepcopy(plan),
+                    steps=steps,
+                    current_step=None,
+                    active_target=None,
+                    target=None,
+                    target_history=[],
+                )
+                self.store.save(r)
+                cancel = threading.Event()
+                self.cancel_events[r["id"]] = cancel
+                self.pool.submit(self.run_mission, r, cancel)
+                return r
+            except Exception:
+                self.cancel_events.pop(r["id"], None) if "r" in locals() else None
+                lock.release()
+                raise
+
+    def _mission_navigation(self, r, step, cancel):
+        rid = r["robot_id"]
+        target = [step["x"], step["y"]]
+        r.update(status="navigating", active_target=target, target=target)
+        self.store.save(r)
+        baseline = self.bridge.navigate(rid, *target, cancel=cancel)
+        step["baseline"] = baseline
+        r["baseline"] = baseline
+        self.store.event(r, "experiment", f"{step['id']} 导航尝试", baseline)
+        if cancel.is_set():
+            raise Canceled()
+        if baseline["success"]:
+            step["validation"] = baseline
+            r["validation"] = baseline
+            return True
+
+        r["status"] = "investigating"
+        self.store.save(r)
+        diagnosis = self.agents[rid].diagnose(r, cancel)
+        step["diagnosis"] = diagnosis
+        r["diagnosis"] = diagnosis
+        self.store.event(r, "diagnosis", f"{step['id']} 故障判断与证据", diagnosis)
+        if cancel.is_set():
+            raise Canceled()
+        if not step.get("auto_repair", False) or diagnosis["cause"] in {"healthy", "unknown"}:
+            step["failure_reason"] = "故障未获准修复或证据不足"
+            return False
+        current = self.bridge.snapshot(rid)
+        params = self.bridge.parameters(rid)
+        if infer(current, params) != diagnosis["cause"]:
+            step["failure_reason"] = "当前证据与修复建议不一致"
+            self.store.event(r, "guard", "修复未执行：当前证据与建议不符")
+            return False
+        r["status"] = "repairing"
+        self.store.save(r)
+        repair = self.bridge.repair(rid, diagnosis["cause"])
+        step["repair"] = repair
+        self.store.event(r, "repair", f"{step['id']} 执行白名单修复", repair)
+        if cancel.is_set():
+            raise Canceled()
+        r["status"] = "validating"
+        self.store.save(r)
+        validation = self.bridge.navigate(rid, *target, cancel=cancel)
+        step["validation"] = validation
+        r["validation"] = validation
+        self.store.event(r, "validation", f"{step['id']} Gazebo 独立位置验收", validation)
+        if not validation["success"]:
+            step["failure_reason"] = "修复后重放未通过位置验收"
+        return validation["success"]
+
+    def run_mission(self, r, cancel):
+        rid = r["robot_id"]
+        try:
+            self.store.event(r, "plan", "结构化多步骤任务开始", r["plan"])
+            for index, step in enumerate(r["steps"]):
+                if cancel.is_set():
+                    raise Canceled()
+                r["current_step"] = index
+                step.update(status="running", started=time.time(), failure_reason=None)
+                self.store.event(
+                    r, "step_started", f"{step['id']} 开始：{step['description']}",
+                    {"step_id": step["id"], "action": step["action"]},
+                )
+                action = step["action"]
+                if action in {"navigate", "return_to_start"}:
+                    success = self._mission_navigation(r, step, cancel)
+                    if not success:
+                        step["status"] = "failed"
+                        r["status"] = "unresolved"
+                        self.store.event(r, "step_failed", f"{step['id']} 失败", {
+                            "reason": step["failure_reason"]
+                        })
+                        break
+                    r["target_history"].append({
+                        "step_id": step["id"], "target": [step["x"], step["y"]],
+                        "finished": time.time(),
+                    })
+                    r["active_target"] = None
+                    self.store.save(r)
+                elif action == "wait":
+                    r["status"] = "waiting"
+                    self.store.save(r)
+                    if cancel.wait(step["duration_seconds"]):
+                        raise Canceled()
+                elif action == "simulate_charge":
+                    r["status"] = "simulated_charging"
+                    self.store.event(r, "charging_started", "仿真充电状态开始", {
+                        "simulated": True, "duration_seconds": step["duration_seconds"]
+                    })
+                    if cancel.wait(step["duration_seconds"]):
+                        raise Canceled()
+                    self.store.event(r, "charging_completed", "仿真充电状态完成", {
+                        "simulated": True
+                    })
+                elif action == "enter_idle":
+                    self.bridge.stop(rid)
+                    r["status"] = "idle"
+                    self.store.event(r, "idle", "机器人进入空闲状态", {"observable": True})
+                step.update(status="completed", finished=time.time())
+                self.store.event(r, "step_completed", f"{step['id']} 完成", {
+                    "step_id": step["id"], "action": action
+                })
+            else:
+                r["status"] = "verified"
+                r["mission_acceptance"] = {
+                    "success": True,
+                    "completed_steps": len(r["steps"]),
+                    "total_steps": len(r["steps"]),
+                    "final_pose_validation": r.get("validation"),
+                }
+                self.store.event(r, "mission_validation", "多步骤任务最终验收通过", r["mission_acceptance"])
+        except Canceled:
+            r["status"] = "canceled"
+            if r.get("current_step") is not None:
+                step = r["steps"][r["current_step"]]
+                step.update(status="canceled", finished=time.time(), failure_reason="用户取消")
+            self.store.event(r, "cancel", "用户取消任务")
+        except Exception as error:
+            r["status"] = "failed"
+            r["error"] = str(error)[:500]
+            if r.get("current_step") is not None:
+                step = r["steps"][r["current_step"]]
+                step.update(status="failed", finished=time.time(), failure_reason=r["error"])
+            self.store.event(r, "error", "多步骤任务未完成", {"error": r["error"]})
+        finally:
+            with self.dispatch_lock:
+                r["active_target"] = None
+                r["finished"] = time.time()
+                try:
+                    self.store.save(r)
+                finally:
+                    self.cancel_events.pop(r["id"], None)
+                    self.bridge.locks[rid].release()
 
     def run(self, r, repair, cancel):
         rid = r["robot_id"]

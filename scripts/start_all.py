@@ -31,8 +31,8 @@ def main():
         children.append(child)
         return child
 
-    def wait_ready(url, child=None, headers=None):
-        until = time.monotonic() + 30
+    def wait_ready(url, child=None, headers=None, timeout=30):
+        until = time.monotonic() + timeout
         while time.monotonic() < until and not stopped.is_set():
             if child is not None and child.poll() is not None:
                 raise RuntimeError("服务启动失败，请查看 .runtime/ 下的启动日志")
@@ -59,7 +59,8 @@ def main():
             except httpx.HTTPError:
                 raise RuntimeError("OpenFang 不可用，请检查地址与认证配置") from None
         child = spawn("start.sh", "lab-service.log")
-        wait_ready(f"http://127.0.0.1:{port}/api/state", child)
+        startup_timeout = 120 if config.SIM_BACKEND == "nav2" else 30
+        wait_ready(f"http://127.0.0.1:{port}/api/state", child, timeout=startup_timeout)
         print(f"已启动：http://127.0.0.1:{port}  （Ctrl+C 停止）", flush=True)
         print("日志：.runtime/lab-service.log、.runtime/openfang-service.log", flush=True)
         while not stopped.wait(0.5):

@@ -1,0 +1,161 @@
+<?xml version="1.0"?>
+<sdf version="1.9" xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:arg name="headless" default="true"/>
+
+  <xacro:macro name="box_model" params="name x y z sx sy sz r g b">
+    <model name="${name}">
+      <static>true</static>
+      <pose>${x} ${y} ${z} 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>${sx} ${sy} ${sz}</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>${sx} ${sy} ${sz}</size></box></geometry>
+          <material>
+            <ambient>${r} ${g} ${b} 1</ambient>
+            <diffuse>${r} ${g} ${b} 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+  </xacro:macro>
+
+  <xacro:macro name="warehouse_shelf" params="name x y sx sy color_r color_g color_b">
+    <model name="${name}">
+      <static>true</static>
+      <pose>${x} ${y} 0 0 0 0</pose>
+      <link name="rack">
+        <collision name="footprint">
+          <pose>0 0 0.9 0 0 0</pose>
+          <geometry><box><size>${sx} ${sy} 1.8</size></box></geometry>
+        </collision>
+        <visual name="shelf_lower">
+            <pose>0 0 0.18 0 0 0</pose>
+            <geometry><box><size>${sx} ${sy} 0.08</size></box></geometry>
+            <material>
+              <ambient>0.18 0.27 0.30 1</ambient>
+              <diffuse>0.25 0.38 0.42 1</diffuse>
+            </material>
+        </visual>
+        <visual name="shelf_middle">
+            <pose>0 0 0.86 0 0 0</pose>
+            <geometry><box><size>${sx} ${sy} 0.08</size></box></geometry>
+            <material><ambient>0.18 0.27 0.30 1</ambient><diffuse>0.25 0.38 0.42 1</diffuse></material>
+        </visual>
+        <visual name="shelf_upper">
+            <pose>0 0 1.54 0 0 0</pose>
+            <geometry><box><size>${sx} ${sy} 0.08</size></box></geometry>
+            <material><ambient>0.18 0.27 0.30 1</ambient><diffuse>0.25 0.38 0.42 1</diffuse></material>
+        </visual>
+        <visual name="post_nw">
+              <pose>${-float(sx)/2 + 0.04} ${float(sy)/2 - 0.04} 0.9 0 0 0</pose>
+              <geometry><box><size>0.08 0.08 1.8</size></box></geometry>
+              <material><ambient>0.12 0.20 0.22 1</ambient><diffuse>0.18 0.31 0.34 1</diffuse></material>
+        </visual>
+        <visual name="post_ne">
+              <pose>${float(sx)/2 - 0.04} ${float(sy)/2 - 0.04} 0.9 0 0 0</pose>
+              <geometry><box><size>0.08 0.08 1.8</size></box></geometry>
+              <material><ambient>0.12 0.20 0.22 1</ambient><diffuse>0.18 0.31 0.34 1</diffuse></material>
+        </visual>
+        <visual name="post_sw">
+              <pose>${-float(sx)/2 + 0.04} ${-float(sy)/2 + 0.04} 0.9 0 0 0</pose>
+              <geometry><box><size>0.08 0.08 1.8</size></box></geometry>
+              <material><ambient>0.12 0.20 0.22 1</ambient><diffuse>0.18 0.31 0.34 1</diffuse></material>
+        </visual>
+        <visual name="post_se">
+              <pose>${float(sx)/2 - 0.04} ${-float(sy)/2 + 0.04} 0.9 0 0 0</pose>
+              <geometry><box><size>0.08 0.08 1.8</size></box></geometry>
+              <material><ambient>0.12 0.20 0.22 1</ambient><diffuse>0.18 0.31 0.34 1</diffuse></material>
+        </visual>
+        <visual name="package_lower">
+          <pose>0 0 0.48 0 0 0</pose>
+          <geometry><box><size>${float(sx)*0.65} ${float(sy)*0.38} 0.48</size></box></geometry>
+          <material>
+            <ambient>${color_r} ${color_g} ${color_b} 1</ambient>
+            <diffuse>${color_r} ${color_g} ${color_b} 1</diffuse>
+          </material>
+        </visual>
+        <visual name="package_upper">
+          <pose>0 0 1.18 0 0 0</pose>
+          <geometry><box><size>${float(sx)*0.55} ${float(sy)*0.45} 0.48</size></box></geometry>
+          <material>
+            <ambient>${color_r} ${color_g} ${color_b} 1</ambient>
+            <diffuse>${color_r} ${color_g} ${color_b} 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+  </xacro:macro>
+
+  <xacro:macro name="visual_pad" params="name x y sx sy r g b">
+    <model name="${name}">
+      <static>true</static>
+      <pose>${x} ${y} 0.012 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><box><size>${sx} ${sy} 0.024</size></box></geometry>
+          <material><ambient>${r} ${g} ${b} 1</ambient><diffuse>${r} ${g} ${b} 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+  </xacro:macro>
+
+  <world name="rdl_warehouse">
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+    <xacro:unless value="$(arg headless)">
+      <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    </xacro:unless>
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin filename="gz-sim-imu-system" name="gz::sim::systems::Imu"/>
+
+    <physics name="3ms" type="ode">
+      <max_step_size>0.003</max_step_size>
+      <real_time_factor>1</real_time_factor>
+    </physics>
+    <scene>
+      <ambient>0.65 0.68 0.70 1</ambient>
+      <background>0.08 0.11 0.13 1</background>
+      <shadows>true</shadows>
+      <grid>false</grid>
+    </scene>
+    <light name="ceiling_light" type="directional">
+      <pose>0 0 8 0 0 0</pose>
+      <diffuse>0.85 0.85 0.82 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.3 0.2 -0.9</direction>
+      <cast_shadows>true</cast_shadows>
+    </light>
+
+    <model name="warehouse_floor">
+      <static>true</static>
+      <link name="floor">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>20 20</size></plane></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>20 20</size></plane></geometry>
+          <material><ambient>0.28 0.30 0.31 1</ambient><diffuse>0.38 0.40 0.41 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <xacro:box_model name="north_wall" x="0" y="3.89" z="1" sx="10" sy="0.22" sz="2" r="0.35" g="0.38" b="0.40"/>
+    <xacro:box_model name="south_wall" x="0" y="-3.89" z="1" sx="10" sy="0.22" sz="2" r="0.35" g="0.38" b="0.40"/>
+    <xacro:box_model name="west_wall" x="-4.89" y="0" z="1" sx="0.22" sy="8" sz="2" r="0.35" g="0.38" b="0.40"/>
+    <xacro:box_model name="east_wall" x="4.89" y="0" z="1" sx="0.22" sy="8" sz="2" r="0.35" g="0.38" b="0.40"/>
+
+    <xacro:warehouse_shelf name="shelf_left_north" x="-3.0" y="1.8" sx="0.9" sy="2.2" color_r="0.55" color_g="0.32" color_b="0.15"/>
+    <xacro:warehouse_shelf name="shelf_left_south" x="-3.0" y="-1.8" sx="0.9" sy="2.2" color_r="0.55" color_g="0.32" color_b="0.15"/>
+    <xacro:warehouse_shelf name="shelf_north" x="0.5" y="2.4" sx="2.3" sy="0.8" color_r="0.55" color_g="0.32" color_b="0.15"/>
+    <xacro:warehouse_shelf name="shelf_south" x="0.5" y="-2.4" sx="2.3" sy="0.8" color_r="0.55" color_g="0.32" color_b="0.15"/>
+    <xacro:warehouse_shelf name="shelf_A" x="3.2" y="0.5" sx="0.9" sy="2.2" color_r="0.18" color_g="0.55" color_b="0.48"/>
+
+    <xacro:box_model name="temporary_crate" x="0.55" y="-0.5" z="0.35" sx="0.7" sy="0.7" sz="0.7" r="0.58" g="0.25" b="0.16"/>
+    <xacro:visual_pad name="charging_station" x="-4.30" y="-3.15" sx="0.8" sy="0.7" r="0.18" g="0.65" b="0.42"/>
+    <xacro:visual_pad name="shelf_A_goal_marker" x="2.0" y="0.5" sx="0.45" sy="0.45" r="0.10" g="0.72" b="0.78"/>
+  </world>
+</sdf>

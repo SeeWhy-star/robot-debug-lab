@@ -18,10 +18,10 @@ export async function smoke(browser) {
       await page.getByText("实时连接正常").waitFor({ state: "attached" });
       await page.getByRole("button", { name: "新建指令", exact: true }).click();
       assert.equal(await page.getByRole("button", { name: "解析并执行任务", exact: true }).isDisabled(), true);
-      await page.getByRole("button", { name: "单机器人示例", exact: true }).click();
-      assert.equal(await page.locator("#instruction").inputValue(), "让机器人 2 去 (7, 6)");
-      await page.getByRole("button", { name: "双机器人示例", exact: true }).click();
-      assert.match(await page.locator("#instruction").inputValue(), /机器人 1.*机器人 2/);
+      await page.getByRole("button", { name: "导航示例", exact: true }).click();
+      assert.equal(await page.locator("#instruction").inputValue(), "让机器人去货架 A");
+      await page.getByText("指令历史（选择后只查看，不会再次执行）").waitFor();
+      await page.getByText("Gazebo + Nav2 仿真").waitFor({ state: "attached" });
       await page.getByRole("button", { name: "规则基线", exact: true }).click();
       assert.match(await page.getByRole("button", { name: "规则基线", exact: true }).getAttribute("class"), /chosen/);
       await page.getByRole("button", { name: "模型 AI", exact: true }).click();
@@ -32,7 +32,7 @@ export async function smoke(browser) {
       const box = await page.getByRole("button", { name: "解析并执行任务", exact: true }).boundingBox();
       assert.ok(box && box.y >= 0 && box.y + box.height <= viewport.height, "primary action must fit first viewport");
       await page.screenshot({ path: `${output}home-${viewport.width}.png`, scale: "css" });
-      console.log(`PASS viewport ${viewport.width}: controls, empty input, primary action, no overflow`);
+      console.log(`PASS viewport ${viewport.width}: Nav2 controls, history semantics, primary action, no overflow`);
     } finally {
       await context.close();
     }
