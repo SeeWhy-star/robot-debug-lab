@@ -15,9 +15,9 @@
 
 ## AI 与确定性程序的分工
 
-只有完整匹配一个已知地点或明确坐标的原子指令才由确定性解析器处理。解析器无法完整消费的请求全部进入模型，不使用“然后、回来后、检查”等连接词列表判断复杂度。复杂任务中，AI 通过 `list_scene_objects`、`resolve_destination`、`get_object_pose`、`get_safe_approach_pose`、`get_robot_state` 和 `list_robot_capabilities` 查询现场并输出最多 8 个结构化步骤。程序把对象 ID 绑定到注册表中的安全接近点，逐步执行 `navigate / wait / return_to_start / enter_idle / simulate_charge`。
+只有完整匹配一个已知地点或明确坐标的原子指令才由确定性解析器处理。解析器无法完整消费的请求全部进入模型，不使用“然后、回来后、检查”等连接词列表判断复杂度。复杂任务中，AI 通过 `list_scene_objects`、`resolve_destination(s)`、`get_object_pose`、`get_safe_approach_pose`、`get_robot_state` 和 `list_robot_capabilities` 查询现场并输出最多 8 个结构化步骤。多地点任务优先使用一次批量解析；网关拒绝完全相同的重复观测。程序把对象 ID 绑定到注册表中的安全接近点，逐步执行 `navigate / wait / return_to_start / enter_idle / simulate_charge`。
 
-机器人能力目录是有限的，用户表达不需要穷举。模型识别到取货、存货或其他当前无法执行的意图时，必须返回零步骤、说明能力缺口并提出只由现有能力组成的替代方案。补充回复会携带完整澄清历史重新进入 Agent。模型输出经过OpenFang协议适配、工具白名单和Pydantic Schema校验；协议包装或字段错误可以反馈给同一Agent自修正，不能降级为规则计划。
+机器人能力目录是有限的，用户表达不需要穷举。模型识别到取货、存货或其他当前无法执行的意图时，必须返回零步骤、说明能力缺口并提出只由现有能力组成的替代方案。补充回复会携带完整澄清历史重新进入 Agent。模型输出经过 OpenFang 协议适配、工具白名单、Pydantic Schema 和跨步骤业务约束校验；例如 `simulate_charge` 必须紧跟在到达 `charging_station` 之后。协议包装、字段或顺序错误会反馈给同一 Agent 自修正，不能降级为规则计划。
 
 AI 还负责开放式故障调查：决定先看节点、参数、雷达速率还是运动状态，并把多条证据组织成原因。程序负责边界：目标范围、机器人锁、工具作用域、调用次数、证据 ID、修复白名单和最终位置阈值。
 

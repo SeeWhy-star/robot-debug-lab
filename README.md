@@ -11,6 +11,8 @@ A TurtleBot3 executes a real Nav2 goal in a repository-owned Gazebo warehouse. T
 - Deterministic code resolves simple named places and explicit coordinates without a model call.
 - The deterministic path accepts only a complete atomic command; unknown, compound, or action-bearing language is delegated to the model instead of being misread as one place name.
 - For complex missions, the supervisor queries the semantic scene and robot capability catalog through bounded tools and returns ordered, structured steps.
+- Multi-stop requests can resolve all named places in one authoritative batch call; duplicate observations are rejected to bound tool use.
+- The gateway validates cross-step invariants, including requiring charging-station arrival immediately before simulated charging.
 - Unsupported intents such as pickup return no executable steps and a grounded alternative; a follow-up is replanned with the full clarification history.
 - A diagnostic agent chooses read-only tools and produces a structured conclusion with real evidence IDs.
 - A deterministic gateway checks fresh evidence before applying the matching allowlisted repair.

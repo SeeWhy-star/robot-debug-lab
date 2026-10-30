@@ -3,7 +3,7 @@ import json
 import pytest
 
 from robot_debug_lab.agents import ModelError
-from robot_debug_lab.semantic_scene import SCENE
+from robot_debug_lab.semantic_scene import SCENE, SemanticScene
 from robot_debug_lab.store import Store
 from robot_debug_lab.supervisor import Supervisor
 
@@ -266,6 +266,52 @@ def test_model_validator_errors_are_serializable_and_can_be_repaired(tmp_path):
     ]
 
 
+def test_simulated_charge_requires_station_arrival_and_model_repairs(tmp_path):
+    class ChargeSequencePlanner:
+        def __init__(self):
+            self.round = 0
+
+        def complete(self, messages, tools):
+            self.round += 1
+            if self.round == 1:
+                return ComplexPlannerModel.call(
+                    "resolve_destinations", {"names": ["充电站"]}
+                ), {}
+            if self.round == 2:
+                return ComplexPlannerModel.call("finish_plan", {
+                    "steps": [{
+                        "action": "simulate_charge", "duration_seconds": 1.0,
+                        "description": "模拟充电",
+                    }],
+                    "message": "开始充电。",
+                }), {}
+            errors = json.loads(messages[-2]["content"])["errors"]
+            assert "charging_station" in errors[0]["msg"]
+            return ComplexPlannerModel.call("finish_plan", {
+                "steps": [
+                    {
+                        "action": "navigate", "destination_id": "charging_station",
+                        "description": "前往充电站",
+                    },
+                    {
+                        "action": "simulate_charge", "duration_seconds": 1.0,
+                        "description": "执行仿真充电",
+                    },
+                ],
+                "message": "先到达充电站，再执行仿真充电。",
+            }), {}
+
+    plan = Supervisor(
+        Store(tmp_path / "runs.db"), model=ChargeSequencePlanner()
+    ).plan("去充电", True)
+
+    assert plan["plan_validation_retries"] == 1
+    assert [step["action"] for step in plan["steps"]] == [
+        "navigate", "simulate_charge",
+    ]
+    assert plan["steps"][0]["destination_id"] == "charging_station"
+
+
 def test_complex_react_plan_has_room_for_multiple_observations_and_repair(tmp_path):
     class LongPlanner:
         def __init__(self):
@@ -302,6 +348,101 @@ def test_complex_react_plan_has_room_for_multiple_observations_and_repair(tmp_pa
     )
     assert model.round == 8
     assert plan["steps"][0]["destination_id"] == "temporary_crate"
+
+
+def test_complex_plan_resolves_multiple_destinations_in_one_grounded_call(tmp_path):
+    class BatchPlanner:
+        def __init__(self):
+            self.round = 0
+
+        def complete(self, messages, tools):
+            self.round += 1
+            assert "resolve_destinations" in {
+                tool["function"]["name"] for tool in tools
+            }
+            if self.round == 1:
+                return ComplexPlannerModel.call("resolve_destinations", {
+                    "names": ["实体障碍箱", "充电站"],
+                }), {"prompt_tokens": 10, "completion_tokens": 2}
+            observation = json.loads(messages[-1]["content"])
+            assert [item["object_id"] for item in observation["results"]] == [
+                "temporary_crate", "charging_station",
+            ]
+            return ComplexPlannerModel.call("finish_plan", {
+                "steps": [
+                    {
+                        "action": "navigate",
+                        "destination_id": "temporary_crate",
+                        "description": "前往障碍箱安全接近点",
+                    },
+                    {"action": "return_to_start", "description": "返回起点"},
+                    {
+                        "action": "navigate",
+                        "destination_id": "charging_station",
+                        "description": "前往充电站",
+                    },
+                ],
+                "message": "已生成经过障碍箱、返回起点并前往充电站的任务。",
+            }), {"prompt_tokens": 12, "completion_tokens": 4}
+
+    model = BatchPlanner()
+    plan = Supervisor(Store(tmp_path / "runs.db"), model).plan(
+        "去实体障碍箱，返回起点后去充电站", True
+    )
+
+    assert model.round == 2
+    assert plan["status"] == "ready"
+    assert plan["usage"] == {"prompt_tokens": 22, "completion_tokens": 6}
+    assert [step["destination_id"] for step in plan["steps"]] == [
+        "temporary_crate", "start", "charging_station",
+    ]
+    assert [call["name"] for call in plan["scene_tool_calls"]] == [
+        "resolve_destinations"
+    ]
+
+
+def test_duplicate_scene_observation_is_rejected_without_reexecuting_tool(tmp_path):
+    class CountingScene(SemanticScene):
+        def __init__(self):
+            super().__init__()
+            self.resolutions = 0
+
+        def resolve_destination(self, name):
+            self.resolutions += 1
+            return super().resolve_destination(name)
+
+    class RepeatingPlanner:
+        def __init__(self):
+            self.round = 0
+
+        def complete(self, messages, tools):
+            self.round += 1
+            if self.round <= 2:
+                return ComplexPlannerModel.call(
+                    "resolve_destinations", {"names": ["货架 A", "充电站"]}
+                ), {}
+            assert json.loads(messages[-1]["content"])["error"] == "duplicate_tool_call"
+            return ComplexPlannerModel.call("finish_plan", {
+                "steps": [
+                    {
+                        "action": "navigate", "destination_id": "shelf_a",
+                        "description": "前往货架 A",
+                    },
+                    {
+                        "action": "navigate", "destination_id": "charging_station",
+                        "description": "前往充电站",
+                    },
+                ],
+                "message": "已生成任务。",
+            }), {}
+
+    scene = CountingScene()
+    plan = Supervisor(
+        Store(tmp_path / "runs.db"), model=RepeatingPlanner(), scene=scene
+    ).plan("先去货架 A，再去充电站", True)
+
+    assert scene.resolutions == 2
+    assert plan["scene_tool_calls"][1]["rejected"] is True
 
 
 def test_complex_plan_cannot_use_unqueried_object(tmp_path):

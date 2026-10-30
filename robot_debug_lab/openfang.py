@@ -96,6 +96,17 @@ class OpenFangModel:
                     parameters = parameter_pattern.findall(body)
                     if len(parameters) == 1 and parameters[0][0] == "arguments":
                         arguments = json.loads(unescape(parameters[0][1]).strip())
+                        # Some providers place the complete gateway call inside
+                        # DSML's ``arguments`` parameter even though the invoke
+                        # element already supplies the tool name. Unwrap only
+                        # the exact, unambiguous shape for the same tool.
+                        if (
+                            isinstance(arguments, dict)
+                            and set(arguments) == {"name", "arguments"}
+                            and arguments["name"] == name
+                            and isinstance(arguments["arguments"], dict)
+                        ):
+                            arguments = arguments["arguments"]
                     else:
                         arguments = {}
                         for parameter_name, raw_value in parameters:

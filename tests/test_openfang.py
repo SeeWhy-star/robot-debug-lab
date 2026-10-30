@@ -147,6 +147,25 @@ def test_remote_parses_deepseek_dsml_through_same_allowlist():
     model.client.close()
 
 
+def test_remote_unwraps_gateway_call_nested_in_dsml_arguments():
+    response = '''<｜｜DSML｜｜ calls>
+<｜｜DSML｜｜ invoke name="resolve_destinations">
+<｜｜DSML｜｜ parameter name="arguments" string="false">{"name":"resolve_destinations","arguments":{"names":["实体障碍箱","充电桩"]}}</｜｜DSML｜｜ parameter>
+</｜｜DSML｜｜ invoke>
+</｜｜DSML｜｜ calls>'''
+    model = remote(lambda _: httpx.Response(200, json={"response": response}))
+    model.agent_id = str(uuid.uuid4())
+    from robot_debug_lab.supervisor import SCENE_TOOLS
+
+    message, _ = model.complete([], SCENE_TOOLS)
+    call = message["tool_calls"][0]["function"]
+    assert call["name"] == "resolve_destinations"
+    assert json.loads(call["arguments"]) == {
+        "names": ["实体障碍箱", "充电桩"]
+    }
+    model.client.close()
+
+
 def test_remote_parses_deepseek_dsml_with_one_parameter_per_schema_field():
     response = '''<｜｜DSML｜｜ calls>
 <｜｜DSML｜｜ invoke name="finish_plan">

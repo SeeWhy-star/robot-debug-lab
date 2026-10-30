@@ -56,6 +56,20 @@ class PlanDraft(BaseModel):
     steps: list[MissionStep] = Field(max_length=8)
     message: str = Field(min_length=1, max_length=1000)
 
+    @model_validator(mode="after")
+    def valid_mission_sequence(self):
+        for index, step in enumerate(self.steps):
+            if step.action != "simulate_charge":
+                continue
+            if index == 0:
+                raise ValueError("simulate_charge requires arrival at charging_station first")
+            previous = self.steps[index - 1]
+            if previous.action != "navigate" or previous.destination_id != "charging_station":
+                raise ValueError(
+                    "simulate_charge must immediately follow navigation to charging_station"
+                )
+        return self
+
 
 FINISH_PLAN_SCHEMA = {
     "type": "object",
@@ -150,6 +164,29 @@ SCENE_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "resolve_destinations",
+            "description": (
+                "Resolve every destination name in a multi-stop request in one authoritative "
+                "registry lookup. Prefer this over several resolve_destination calls."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "names": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 1,
+                        "maxItems": 8,
+                    }
+                },
+                "required": ["names"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "finish_plan",
             "description": "Return ordered steps, or steps=[] with a clarification question.",
             "parameters": FINISH_PLAN_SCHEMA,
@@ -187,18 +224,24 @@ ROBOT_CAPABILITIES = [
 ]
 
 
-MISSION_SYSTEM = """You plan complex missions for one robot in a Nav2 + Gazebo warehouse.
-Use scene tools for every named destination. Never invent or copy coordinates for named objects;
-finish_plan must use the returned object_id and the server will bind its safe approach pose.
-Use navigate, wait, return_to_start, enter_idle, and simulate_charge only. Charging is a clearly
-labelled simulation state, not a physical battery claim. Unknown objects require steps=[] and a
-concise Chinese clarification question. If the request includes an operation outside the available
-skills, call list_robot_capabilities, return steps=[], explain the capability gap, and propose a
-concrete alternative made only from available skills. Do not silently turn pickup, storage,
-inspection, or another unsupported operation into waiting, and never claim that it completed.
-Keep the user's order, use at most 8 steps, and never claim execution or success. Shell, velocity
-control, fault injection, parameter changes, and arbitrary tools are forbidden. Descriptions and
-message must be Chinese.
+MISSION_SYSTEM = """Plan a mission for one robot in a Nav2 + Gazebo warehouse.
+Ground every named destination with scene tools. For two or more names, prefer one
+resolve_destinations call. Never invent coordinates for named objects; finish_plan uses returned
+object_id values and the server binds safe approach poses. Available steps are navigate, wait,
+return_to_start, enter_idle, and simulate_charge. Charging is explicitly simulated. For an unknown
+object, return steps=[] and ask a concise Chinese question. For pickup, storage, inspection, or any
+unsupported operation, query list_robot_capabilities, return steps=[], explain the gap, and offer
+an executable alternative. Never pretend an unsupported operation is waiting or completed. Preserve
+the requested order, use at most 8 steps, and never claim execution. Shell, velocity control, fault
+injection, parameter changes, and arbitrary tools are forbidden. Use Chinese descriptions/messages.
+
+Tool budget: for a supported navigation/wait/idle/charge request, call resolve_destinations exactly
+once with all named places, then finish_plan. Do not call list_scene_objects unless a resolution is
+unknown. Do not call list_robot_capabilities unless the user requests an unsupported operation. Do
+not call get_robot_state unless the plan depends on current robot state. Never repeat a tool call.
+simulate_charge must immediately follow a navigate step to charging_station.
+Charging example: [{"action":"navigate","destination_id":"charging_station","description":"前往充电站"},
+{"action":"simulate_charge","duration_seconds":5,"description":"执行仿真充电"}].
 """
 
 
@@ -269,6 +312,15 @@ class Supervisor:
             return ROBOT_CAPABILITIES
         if name == "resolve_destination" and set(args) == {"name"}:
             return self.scene.resolve_destination(args["name"])
+        if name == "resolve_destinations" and set(args) == {"names"}:
+            names = args["names"]
+            if (
+                not isinstance(names, list)
+                or not 1 <= len(names) <= 8
+                or any(not isinstance(item, str) or not item.strip() for item in names)
+            ):
+                raise ValueError("names 必须包含 1 到 8 个非空地点名称")
+            return {"results": [self.scene.resolve_destination(item) for item in names]}
         raise ValueError("无效或越权的场景工具调用")
 
     def _model_draft(self, turns, plan):
@@ -287,6 +339,7 @@ class Supervisor:
         usage = {"prompt_tokens": 0, "completion_tokens": 0}
         observed_objects = set()
         tool_trace = []
+        seen_tool_calls = set()
         protocol_retries = 0
         plan_validation_retries = 0
         try:
@@ -360,7 +413,9 @@ class Supervisor:
                                     "robot action was executed. Use exactly the supplied action "
                                     "enum and fields. For any unsupported operation, return "
                                     "steps=[] with a Chinese capability-gap explanation and an "
-                                    "available alternative. Call finish_plan again."
+                                    "available alternative. simulate_charge accepts only action, "
+                                    "duration_seconds and description, and must immediately follow "
+                                    "navigate to charging_station. Call finish_plan again."
                                 ),
                             })
                             break
@@ -371,10 +426,32 @@ class Supervisor:
                                 self.scene.get_safe_approach_pose(step.destination_id)
                         plan["scene_tool_calls"] = tool_trace
                         return draft, usage, remote
+                    signature = (name, json.dumps(args, ensure_ascii=False, sort_keys=True))
+                    if signature in seen_tool_calls:
+                        result = {
+                            "error": "duplicate_tool_call",
+                            "instruction": "已有相同观测，请直接调用 finish_plan。",
+                        }
+                        tool_trace.append({
+                            "name": name, "arguments": args, "result": result,
+                            "rejected": True,
+                        })
+                        messages.append({
+                            "role": "tool", "tool_call_id": call["id"],
+                            "content": json.dumps(result, ensure_ascii=False),
+                        })
+                        continue
+                    seen_tool_calls.add(signature)
                     try:
                         result = self._tool(name, args)
                         if name == "list_scene_objects":
                             observed_objects.update(item["object_id"] for item in result)
+                        elif name == "resolve_destinations":
+                            observed_objects.update(
+                                item["object_id"]
+                                for item in result["results"]
+                                if item.get("resolved")
+                            )
                         elif isinstance(result, dict) and result.get("object_id"):
                             observed_objects.add(result["object_id"])
                     except (ValueError, TypeError, KeyError) as error:
