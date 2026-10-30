@@ -23,6 +23,8 @@
 
 三种故障的 AI 与规则矩阵均已通过，包含识别、任务恢复、错修复、工具调用、耗时和 token 指标，见 [故障评测结果](docs/fault-evaluation-results.json)。
 
+任务级恢复另有一个真实动态场景：后端通过 Gazebo `set_pose` 把实体 `temporary_crate` 移到货架 A 的默认接近点。首次 Nav2 导航必须实际失败；程序先用新鲜 ROS 状态排除已知系统故障，然后重规划 Agent 读取任务进度和经过审核的候选接近点，只能选择 Nav2 实测可达的替代点。网关保留已完成和后续步骤、记录计划版本，再由 Gazebo 验收重试结果。Agent 看不到场景注入标签，也不能编造坐标。真实结果见[重规划验收记录](docs/replanning-acceptance-results.json)。
+
 ## 系统结构
 
 ```mermaid
@@ -88,6 +90,7 @@ AI 模式需要在 `.env` 配置直连模型，或设置 `RDL_AGENT_BACKEND=open
 .venv/bin/python scripts/acceptance_nav2.py --mode rules
 .venv/bin/python scripts/acceptance_nav2.py --mode ai
 .venv/bin/python scripts/acceptance_missions.py --reset
+.venv/bin/python scripts/acceptance_replanning.py
 .venv/bin/python scripts/evaluate_fault_matrix.py --mode both
 ```
 

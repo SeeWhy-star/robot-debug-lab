@@ -6,9 +6,10 @@ from .supervisor import NavigationTask
 
 
 class Workflow:
-    def __init__(self, bridge, store):
+    def __init__(self, bridge, store, replanner=None):
         self.bridge = bridge
         self.store = store
+        self.replanner = replanner
         robot_ids = tuple(getattr(bridge, "robot_ids", bridge.locks.keys()))
         self.agents = {rid: RobotAgent(bridge, store, robot=rid) for rid in robot_ids}
         self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
@@ -114,6 +115,8 @@ class Workflow:
                     active_target=None,
                     target=None,
                     target_history=[],
+                    plan_version=1,
+                    plan_revisions=[],
                 )
                 self.store.save(r)
                 cancel = threading.Event()
@@ -131,6 +134,10 @@ class Workflow:
         r.update(status="navigating", active_target=target, target=target)
         self.store.save(r)
         baseline = self.bridge.navigate(rid, *target, cancel=cancel)
+        step.setdefault("attempts", []).append({
+            "target": target, "approach_id": step.get("approach_id"),
+            "result": baseline,
+        })
         step["baseline"] = baseline
         r["baseline"] = baseline
         self.store.event(r, "experiment", f"{step['id']} 导航尝试", baseline)
@@ -143,6 +150,33 @@ class Workflow:
 
         r["status"] = "investigating"
         self.store.save(r)
+        # Known ROS/Nav2 mechanisms have deterministic, freshly observed
+        # signatures.  If all of them are healthy, route recovery is the next
+        # problem; spending an LLM loop repeatedly proving health adds no value.
+        current = self.bridge.snapshot(rid)
+        params = self.bridge.parameters(rid)
+        preflight_cause = infer(current, params)
+        if preflight_cause == "healthy":
+            evidence = self.store.event(
+                r, "route_preflight", f"{step['id']} 导航栈健康检查", {
+                    "topics": current.get("topics"),
+                    "nav2_lifecycle": params.get("nav2_lifecycle"),
+                    "controller": params.get("controller"),
+                    "navigation_failure": baseline,
+                }
+            )
+            diagnosis = {
+                "cause": "healthy",
+                "summary": "雷达链路、Nav2 lifecycle 和控制器参数均健康，转入路线恢复。",
+                "evidence_ids": [evidence["id"]],
+                "repair_rationale": "不执行系统修复；查询审核过的替代接近点。",
+                "source": "deterministic_preflight",
+            }
+            step["diagnosis"] = diagnosis
+            r["diagnosis"] = diagnosis
+            self.store.event(r, "diagnosis", f"{step['id']} 系统故障前置排除", diagnosis)
+            step["failure_reason"] = "导航栈健康，但当前语义接近点实测不可达"
+            return False
         diagnosis = self.agents[rid].diagnose(r, cancel)
         step["diagnosis"] = diagnosis
         r["diagnosis"] = diagnosis
@@ -175,6 +209,56 @@ class Workflow:
             step["failure_reason"] = "修复后重放未通过位置验收"
         return validation["success"]
 
+    def _replan_failed_navigation(self, r, index, step, cancel):
+        if (
+            self.replanner is None
+            or r.get("mode") != "ai"
+            or (step.get("diagnosis") or {}).get("cause") != "healthy"
+            or len(r.get("plan_revisions", [])) >= 2
+        ):
+            return False
+        r["status"] = "replanning"
+        self.store.event(r, "replan_started", f"{step['id']} 启动任务级重规划", {
+            "failed_target": [step.get("x"), step.get("y")],
+            "failed_approach_id": step.get("approach_id"),
+            "preserved_completed_steps": [
+                item["id"] for item in r["steps"][:index]
+                if item.get("status") == "completed"
+            ],
+        })
+        revision = self.replanner.replan(r, index, cancel)
+        if not revision or revision["decision"] == "abort":
+            if revision:
+                step["failure_reason"] = revision["reason"]
+                r["plan_revisions"].append({
+                    "version": r["plan_version"], **revision,
+                })
+            return False
+        replacement = revision.pop("replacement_step")
+        attempts = step.get("attempts", [])
+        original = {
+            key: step.get(key)
+            for key in ["id", "destination_id", "approach_id", "x", "y", "description"]
+        }
+        step.update(replacement)
+        step["attempts"] = attempts
+        step["status"] = "running"
+        r["plan_version"] += 1
+        record = {
+            "version": r["plan_version"],
+            "failed_step_id": step["id"],
+            "original": original,
+            "replacement": {
+                key: step.get(key)
+                for key in ["id", "destination_id", "approach_id", "x", "y", "description"]
+            },
+            **revision,
+        }
+        r["plan_revisions"].append(record)
+        self.store.event(r, "replan_applied", f"{step['id']} 应用受限重规划", record)
+        self.store.save(r)
+        return self._mission_navigation(r, step, cancel)
+
     def run_mission(self, r, cancel):
         rid = r["robot_id"]
         try:
@@ -191,6 +275,10 @@ class Workflow:
                 action = step["action"]
                 if action in {"navigate", "return_to_start"}:
                     success = self._mission_navigation(r, step, cancel)
+                    if not success and action == "navigate":
+                        success = self._replan_failed_navigation(
+                            r, index, step, cancel
+                        )
                     if not success:
                         step["status"] = "failed"
                         r["status"] = "unresolved"
@@ -234,6 +322,8 @@ class Workflow:
                     "completed_steps": len(r["steps"]),
                     "total_steps": len(r["steps"]),
                     "final_pose_validation": r.get("validation"),
+                    "plan_version": r.get("plan_version", 1),
+                    "replan_count": len(r.get("plan_revisions", [])),
                 }
                 self.store.event(r, "mission_validation", "多步骤任务最终验收通过", r["mission_acceptance"])
         except Canceled:

@@ -16,6 +16,7 @@ A TurtleBot3 executes a real Nav2 goal in a repository-owned Gazebo warehouse. T
 - Unsupported intents such as pickup return no executable steps and a grounded alternative; a follow-up is replanned with the full clarification history.
 - A diagnostic agent chooses read-only tools and produces a structured conclusion with real evidence IDs.
 - A deterministic gateway checks fresh evidence before applying the matching allowlisted repair.
+- When the stack is healthy but a reviewed semantic approach fails in execution, a separate Agent may select only a Nav2-verified alternative approach while completed and later mission steps remain unchanged.
 - Nav2 remains responsible for planning and control; the model never publishes velocity commands.
 
 Local end-to-end acceptance on 2026-10-29 completed the same laser incident in both modes. The rules baseline finished with 0 tokens and 0.1816 m final error. The OpenFang AI run produced 11 recorded events, consumed 12132 provider-reported tokens, and finished with 0.2536 m final error. See the committed [acceptance summary](docs/nav2-acceptance-results.json).
@@ -45,6 +46,7 @@ Run the live incident acceptance against a running server:
 .venv/bin/python scripts/acceptance_nav2.py --mode rules
 .venv/bin/python scripts/acceptance_nav2.py --mode ai
 .venv/bin/python scripts/acceptance_missions.py --reset
+.venv/bin/python scripts/acceptance_replanning.py
 .venv/bin/python scripts/evaluate_fault_matrix.py --mode both
 ```
 
@@ -65,6 +67,8 @@ flowchart LR
 The dashboard includes mission input, the actual 2-D Nav2 occupancy map with live warehouse telemetry, controlled fault injection, evidence timelines, rules/AI comparison, JSON export, and a separate real-source repair case. Start with `RDL_NATIVE_GUI=1 bash scripts/start_all.sh` to inspect the native 3-D Gazebo world and RViz alongside the dashboard.
 
 A live mission acceptance covers the previous failure phrase `机器人去实体障碍箱回来后去充电`: OpenFang resolves real scene objects, the gateway binds reviewed approach poses, and Nav2 executes the resulting crate → start → charging-station mission. The same acceptance verifies that `去货架 A 拿货，然后去充电` remains a clarification with no robot run because this TurtleBot3 has no pickup capability.
+
+A separate [live replanning result](docs/replanning-acceptance-results.json) moves the physical crate onto Shelf A's default approach. The first Nav2 attempt fails, OpenFang cites mission and route evidence, selects a server-reviewed Nav2-reachable alternative, and Gazebo independently accepts the retry.
 
 ## Real Nav2 source case
 

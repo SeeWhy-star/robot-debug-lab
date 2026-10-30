@@ -16,6 +16,7 @@ from .config import (
 from .store import Store
 from .workflow import Workflow
 from .supervisor import Supervisor
+from .mission_replanner import MissionReplanner
 from .agents import ModelError
 
 
@@ -26,9 +27,14 @@ async def lifespan(app):
     bridge = await asyncio.to_thread(Nav2Bridge)
     app.state.bridge = bridge
     app.state.store = Store()
-    app.state.workflow = Workflow(bridge, app.state.store)
     app.state.supervisor = Supervisor(
         app.state.store, robot_state=lambda: bridge.snapshot("robot_1")
+    )
+    app.state.replanner = MissionReplanner(
+        app.state.store, bridge, app.state.supervisor.scene
+    )
+    app.state.workflow = Workflow(
+        bridge, app.state.store, replanner=app.state.replanner
     )
     app.state.token = secrets.token_urlsafe(32)
     yield
@@ -60,6 +66,10 @@ class Diagnose(BaseModel):
 
 class Fault(BaseModel):
     kind: Literal["scan_interrupted", "navigator_inactive", "controller_velocity_zero"]
+
+
+class Scenario(BaseModel):
+    kind: Literal["shelf_a_primary_blocked"]
 
 
 class AssistantRequest(BaseModel):
@@ -189,7 +199,21 @@ def inject(rid: str, f: Fault):
 @app.post("/api/robots/{rid}/reset")
 def reset(rid: str):
     with exclusive(rid):
-        return app.state.bridge.reset(rid)
+        result = app.state.bridge.reset(rid)
+        app.state.supervisor.scene.clear_runtime_poses()
+        return result
+
+
+@app.post("/api/robots/{rid}/scenario")
+def scenario(rid: str, value: Scenario):
+    with exclusive(rid):
+        result = app.state.bridge.set_scenario(rid, value.kind)
+        app.state.supervisor.scene.set_runtime_pose(
+            "temporary_crate",
+            {"x": 2.0, "y": 0.5, "z": 0.35, "yaw": 0.0},
+            {"x": 1.1, "y": 0.5, "yaw": 0.0},
+        )
+        return result
 
 
 @app.post("/api/robots/{rid}/navigate")

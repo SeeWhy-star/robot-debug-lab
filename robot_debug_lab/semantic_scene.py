@@ -7,6 +7,7 @@ returned as goals.
 
 from copy import deepcopy
 import re
+import threading
 
 
 class UnknownSceneObject(ValueError):
@@ -15,6 +16,8 @@ class UnknownSceneObject(ValueError):
 
 class SemanticScene:
     def __init__(self):
+        self._lock = threading.RLock()
+        self._runtime_poses = {}
         self._objects = {
             "shelf_a": {
                 "object_id": "shelf_a",
@@ -23,6 +26,20 @@ class SemanticScene:
                 "kind": "shelf",
                 "pose": {"x": 3.2, "y": 0.5, "yaw": 0.0},
                 "safe_approach_pose": {"x": 2.0, "y": 0.5, "yaw": 0.0},
+                "approach_poses": [
+                    {
+                        "approach_id": "west",
+                        "label": "货架 A 西侧默认接近点",
+                        "pose": {"x": 2.0, "y": 0.5, "yaw": 0.0},
+                        "default": True,
+                    },
+                    {
+                        "approach_id": "southwest",
+                        "label": "货架 A 西南备用接近点",
+                        "pose": {"x": 2.0, "y": -1.0, "yaw": 0.7},
+                        "default": False,
+                    },
+                ],
                 "aliases": ["货架a", "货架 a", "a货架", "shelf a", "shelf_a"],
             },
             "temporary_crate": {
@@ -85,21 +102,69 @@ class SemanticScene:
 
     def get_object_pose(self, object_id):
         item = self._get(object_id)
+        with self._lock:
+            runtime = deepcopy(self._runtime_poses.get(object_id))
         return {
             "object_id": object_id,
             "gazebo_entity": item["gazebo_entity"],
-            "pose": deepcopy(item["pose"]),
+            "pose": runtime["pose"] if runtime else deepcopy(item["pose"]),
+            "source": "gazebo_runtime_override" if runtime else "semantic_scene_registry",
             "navigation_goal": False,
         }
 
     def get_safe_approach_pose(self, object_id):
         item = self._get(object_id)
+        approach = self.get_approach_options(object_id)[0]
         return {
             "object_id": object_id,
-            "pose": deepcopy(item["safe_approach_pose"]),
+            "approach_id": approach["approach_id"],
+            "pose": deepcopy(approach["pose"]),
             "source": "semantic_scene_registry",
             "navigation_goal": True,
         }
+
+    def get_approach_options(self, object_id):
+        item = self._get(object_id)
+        with self._lock:
+            runtime = deepcopy(self._runtime_poses.get(object_id))
+        if runtime:
+            return [{
+                "approach_id": "runtime_safe",
+                "label": f"{item['label']}当前安全接近点",
+                "pose": runtime["safe_approach_pose"],
+                "default": True,
+            }]
+        approaches = item.get("approach_poses") or [{
+            "approach_id": "default",
+            "label": f"{item['label']}安全接近点",
+            "pose": item["safe_approach_pose"],
+            "default": True,
+        }]
+        return deepcopy(approaches)
+
+    def get_approach_pose(self, object_id, approach_id):
+        for approach in self.get_approach_options(object_id):
+            if approach["approach_id"] == approach_id:
+                return {
+                    "object_id": object_id,
+                    "approach_id": approach_id,
+                    "pose": deepcopy(approach["pose"]),
+                    "source": "semantic_scene_registry",
+                    "navigation_goal": True,
+                }
+        raise UnknownSceneObject(f"对象 {object_id} 没有接近点：{approach_id}")
+
+    def set_runtime_pose(self, object_id, pose, safe_approach_pose):
+        self._get(object_id)
+        with self._lock:
+            self._runtime_poses[object_id] = {
+                "pose": deepcopy(pose),
+                "safe_approach_pose": deepcopy(safe_approach_pose),
+            }
+
+    def clear_runtime_poses(self):
+        with self._lock:
+            self._runtime_poses.clear()
 
     def resolve_destination(self, name):
         normalized = self._normalize(name)
@@ -118,18 +183,23 @@ class SemanticScene:
         if object_id is None:
             return {"resolved": False, "query": name, "reason": "unknown_object"}
         item = self._objects[object_id]
+        approach = self.get_safe_approach_pose(object_id)
         return {
             "resolved": True,
             "query": name,
             "object_id": object_id,
             "label": item["label"],
             "kind": item["kind"],
-            "pose": deepcopy(item["safe_approach_pose"]),
+            "pose": deepcopy(approach["pose"]),
             "pose_kind": "safe_approach",
         }
 
-    def navigation_pose(self, object_id):
-        pose = self._get(object_id)["safe_approach_pose"]
+    def navigation_pose(self, object_id, approach_id=None):
+        pose = (
+            self.get_approach_pose(object_id, approach_id)["pose"]
+            if approach_id
+            else self.get_safe_approach_pose(object_id)["pose"]
+        )
         return float(pose["x"]), float(pose["y"])
 
 

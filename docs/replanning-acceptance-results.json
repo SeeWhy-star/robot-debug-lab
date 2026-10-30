@@ -1,0 +1,41 @@
+{
+  "generated_at": "2026-10-29",
+  "simulation": "gazebo_nav2",
+  "runtime": "openfang",
+  "run_id": "f1ac0d020e14",
+  "scenario": {
+    "entity": "temporary_crate",
+    "blocked_approach": "shelf_a/west",
+    "pose": [2.0, 0.5]
+  },
+  "status": "verified",
+  "plan_version": 2,
+  "replan_count": 1,
+  "selected_approach": "southwest",
+  "attempts": [
+    {
+      "approach_id": "west",
+      "success": false,
+      "error": 0.7704
+    },
+    {
+      "approach_id": "southwest",
+      "success": true,
+      "error": 0.1815
+    }
+  ],
+  "tool_calls": [
+    "get_mission_state",
+    "list_approach_options"
+  ],
+  "usage": {
+    "prompt_tokens": 15536,
+    "completion_tokens": 433
+  },
+  "acceptance": {
+    "success": true,
+    "final_target": [2.0, -1.0],
+    "final_pose_source": "gazebo_odometry",
+    "final_error": 0.1815
+  }
+}

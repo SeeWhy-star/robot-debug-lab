@@ -149,6 +149,23 @@ def test_scene_registry_distinguishes_entity_pose_from_safe_goal():
     assert approach["navigation_goal"] is True
 
 
+def test_runtime_gazebo_pose_override_updates_entity_and_safe_approach():
+    scene = SemanticScene()
+    scene.set_runtime_pose(
+        "temporary_crate",
+        {"x": 2.0, "y": 0.5, "z": 0.35, "yaw": 0.0},
+        {"x": 1.1, "y": 0.5, "yaw": 0.0},
+    )
+
+    assert scene.get_object_pose("temporary_crate")["pose"]["x"] == 2.0
+    assert scene.get_object_pose("temporary_crate")["source"] == "gazebo_runtime_override"
+    assert scene.resolve_destination("实体障碍箱")["pose"]["x"] == 1.1
+    assert scene.get_safe_approach_pose("temporary_crate")["approach_id"] == "runtime_safe"
+
+    scene.clear_runtime_poses()
+    assert scene.get_object_pose("temporary_crate")["pose"]["x"] == 0.55
+
+
 def test_complex_task_uses_scene_tools_and_structured_steps(tmp_path):
     model = ComplexPlannerModel()
     plan = Supervisor(Store(tmp_path / "runs.db"), model).plan(

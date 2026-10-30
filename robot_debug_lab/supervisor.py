@@ -478,8 +478,16 @@ class Supervisor:
             if step.action == "return_to_start":
                 item["destination_id"] = "start"
             if item.get("destination_id"):
-                x, y = self.scene.navigation_pose(item["destination_id"])
-                item.update(x=x, y=y, pose_source="semantic_scene_registry")
+                approach = self.scene.get_safe_approach_pose(item["destination_id"])
+                x, y = self.scene.navigation_pose(
+                    item["destination_id"], approach["approach_id"]
+                )
+                item.update(
+                    x=x,
+                    y=y,
+                    approach_id=approach["approach_id"],
+                    pose_source="semantic_scene_registry",
+                )
             materialized.append(item)
         return materialized
 

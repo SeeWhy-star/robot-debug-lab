@@ -23,6 +23,10 @@ AI 还负责开放式故障调查：决定先看节点、参数、雷达速率�
 
 规则基线执行同一工作流，用三组互不相同的固定条件判断雷达链路、lifecycle 和 controller 配置故障。它用于控制变量，不冒充 AI 结果。
 
+## 任务级重规划
+
+语义对象可以登记多个经过审核的安全接近点。Gazebo 实体障碍导致一次真实导航失败后，程序先读取雷达、lifecycle 和 controller 参数：匹配已知系统故障时进入原诊断/白名单修复链；三者均健康时才进入路线恢复。重规划 Agent 只能调用 `get_mission_state` 和 `list_approach_options`，后者使用 Nav2 `ComputePathToPose` 检查候选点。Agent 只能选择工具返回的可达 `approach_id` 或中止，不能提供坐标、改变目的地、重新执行已完成步骤或删除后续步骤。每次修订都增加计划版本并保留原目标、失败尝试、证据和替代目标。
+
 ## 运行状态
 
 诊断任务依次经过 `reproducing → investigating → repairing → validating → verified/unresolved`。多步骤任务为每一步记录开始、完成、失败原因与取消状态，并在最终验收后进入 `verified`。网页只显示后端明确标记的活动目标；拒绝、澄清和历史计划不会继续显示成当前目标。

@@ -61,7 +61,7 @@ class Nav2Bridge:
 
     def __init__(self):
         try:
-            from nav2_msgs.action import NavigateToPose
+            from nav2_msgs.action import ComputePathToPose, NavigateToPose
             from nav2_msgs.srv import ManageLifecycleNodes
         except ImportError as error:
             raise RuntimeError(
@@ -69,6 +69,7 @@ class Nav2Bridge:
             ) from error
 
         self.NavigateToPose = NavigateToPose
+        self.ComputePathToPose = ComputePathToPose
         self.ManageLifecycleNodes = ManageLifecycleNodes
         rclpy.init(signal_handler_options=rclpy.signals.SignalHandlerOptions.NO)
         self.node = Node(
@@ -89,6 +90,7 @@ class Nav2Bridge:
         self.scan_raw_times = deque(maxlen=200)
         self.scan_forwarded_times = deque(maxlen=200)
         self.active_goal = None
+        self.scenario = None
         self.log_handle = None
         self.sim = None
 
@@ -111,6 +113,9 @@ class Nav2Bridge:
             PoseWithCovarianceStamped, "/initialpose", initial_pose_qos
         )
         self.client = ActionClient(self.node, NavigateToPose, "/navigate_to_pose")
+        self.path_client = ActionClient(
+            self.node, ComputePathToPose, "/compute_path_to_pose"
+        )
         self.lifecycle_client = self.node.create_client(
             GetState, "/bt_navigator/get_state"
         )
@@ -456,6 +461,35 @@ class Nav2Bridge:
             raise ValueError("不支持的 Nav2 故障类型")
         return {"applied": fault, "robot_id": robot}
 
+    def set_scenario(self, robot, scenario):
+        """Apply a fixed Gazebo scenario without exposing shell access to an Agent."""
+        self._require_robot(robot)
+        if scenario != "shelf_a_primary_blocked":
+            raise ValueError("不支持的场景")
+        request = (
+            'name: "temporary_crate" '
+            "position: {x: 2.0, y: 0.5, z: 0.35} orientation: {w: 1.0}"
+        )
+        command = [
+            "gz", "service", "-s", "/world/rdl_warehouse/set_pose",
+            "--reqtype", "gz.msgs.Pose", "--reptype", "gz.msgs.Boolean",
+            "--timeout", "3000", "--req", request,
+        ]
+        result = subprocess.run(
+            command, cwd=ROOT, capture_output=True, text=True, timeout=5
+        )
+        if result.returncode != 0 or "true" not in result.stdout:
+            raise RuntimeError("Gazebo 未能移动实体障碍箱")
+        self.scenario = scenario
+        # Give the real laser/costmap pipeline time to observe the moved entity.
+        time.sleep(2.0)
+        return {
+            "applied": scenario,
+            "robot_id": robot,
+            "entity": "temporary_crate",
+            "pose": {"x": 2.0, "y": 0.5, "z": 0.35},
+        }
+
     def reset(self, robot):
         self._require_robot(robot)
         self.stop(robot)
@@ -468,8 +502,54 @@ class Nav2Bridge:
             self.pose = None
             self.ground_truth = None
         self._start_sim()
+        self.scenario = None
         self.controller_defaults = self.controller_config()
         return {"reset": robot, "note": "Gazebo 世界和 Nav2 已恢复到初始位置"}
+
+    def plan_path(self, robot, x, y, timeout=6.0):
+        """Ask Nav2's actual planner whether a reviewed pose has a path."""
+        self._require_robot(robot)
+        if not self.path_client.wait_for_server(timeout_sec=3):
+            return {
+                "reachable": False, "target": [x, y],
+                "reason": "compute_path_action_unavailable",
+            }
+        goal = self.ComputePathToPose.Goal()
+        goal.goal.header.frame_id = "map"
+        goal.goal.header.stamp = self.node.get_clock().now().to_msg()
+        goal.goal.pose.position.x = float(x)
+        goal.goal.pose.position.y = float(y)
+        goal.goal.pose.orientation.w = 1.0
+        goal.planner_id = "GridBased"
+        goal.use_start = False
+        try:
+            handle = self._wait(self.path_client.send_goal_async(goal), 3)
+            if not handle.accepted:
+                return {
+                    "reachable": False, "target": [x, y], "reason": "goal_rejected"
+                }
+            wrapped = self._wait(handle.get_result_async(), timeout)
+            result = wrapped.result
+            poses = list(result.path.poses)
+            length = sum(
+                math.hypot(
+                    b.pose.position.x - a.pose.position.x,
+                    b.pose.position.y - a.pose.position.y,
+                )
+                for a, b in zip(poses, poses[1:])
+            )
+            return {
+                "reachable": int(result.error_code) == 0 and bool(poses),
+                "target": [float(x), float(y)],
+                "path_length": round(length, 3),
+                "pose_count": len(poses),
+                "error_code": int(result.error_code),
+                "reason": result.error_msg or "path_found",
+            }
+        except (TimeoutError, RuntimeError):
+            return {
+                "reachable": False, "target": [x, y], "reason": "planning_timeout"
+            }
 
     def navigate(self, robot, x=0.5, y=0.5, timeout=25.0, cancel=None):
         self._require_robot(robot)
@@ -568,6 +648,7 @@ class Nav2Bridge:
                 "busy": self.locks["robot_1"].locked(),
                 "scan": self.topic_health(),
                 "runtime": "nav2_gazebo",
+                "scenario_active": self.scenario is not None,
             }
         ]
 

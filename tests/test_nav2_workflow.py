@@ -260,6 +260,78 @@ def test_multistep_wait_can_be_canceled_and_later_steps_do_not_run(tmp_path):
     assert bridge.moves == []
 
 
+def test_healthy_route_failure_replans_only_failed_step_and_keeps_completed_steps(tmp_path):
+    class BlockedApproachBridge(Nav2IncidentBridge):
+        def __init__(self):
+            super().__init__()
+            self.interrupted = False
+
+        def navigate(self, robot, x, y, cancel=None):
+            self.moves.append((robot, x, y))
+            success = (x, y) != (2.0, 0.5)
+            return {
+                "success": success,
+                "error": 0.1 if success else 1.2,
+                "target": [x, y],
+                "message": "reached" if success else "navigation_timeout",
+            }
+
+    class HealthyAgent:
+        def diagnose(self, run, cancel):
+            return {
+                "cause": "healthy", "summary": "导航栈健康。",
+                "evidence_ids": ["E1"], "repair_rationale": "不执行系统修复。",
+            }
+
+    class FixedReplanner:
+        def replan(self, run, index, cancel):
+            assert index == 1
+            assert run["steps"][0]["status"] == "completed"
+            replacement = dict(run["steps"][index])
+            replacement.update(
+                x=2.0, y=-1.0, approach_id="southwest", status="pending",
+                failure_reason=None, pose_source="semantic_scene_registry_replan",
+            )
+            return {
+                "decision": "retry_with_approach", "failed_step_id": "S2",
+                "approach_id": "southwest", "reason": "备用接近点可达。",
+                "evidence_ids": ["E1", "E2"], "replacement_step": replacement,
+            }
+
+    bridge = BlockedApproachBridge()
+    flow = Workflow(bridge, Store(tmp_path / "runs.db"), replanner=FixedReplanner())
+    flow.agents["robot_1"] = HealthyAgent()
+    steps = [
+        {
+            "id": "S1", "action": "return_to_start", "destination_id": "start",
+            "approach_id": "default", "x": -2.0, "y": -0.5,
+            "duration_seconds": None, "description": "完成前置步骤",
+            "auto_repair": True, "status": "pending",
+        },
+        {
+            "id": "S2", "action": "navigate", "destination_id": "shelf_a",
+            "approach_id": "west", "x": 2.0, "y": 0.5,
+            "duration_seconds": None, "description": "前往货架 A",
+            "auto_repair": True, "status": "pending",
+        },
+    ]
+    run_id = flow.submit_mission(mission_plan(steps))["id"]
+    flow.pool.shutdown(wait=True)
+    result = flow.store.get(run_id)
+
+    assert result["status"] == "verified"
+    assert result["steps"][0]["status"] == "completed"
+    assert result["steps"][1]["status"] == "completed"
+    assert result["steps"][1]["approach_id"] == "southwest"
+    assert result["plan_version"] == 2
+    assert result["mission_acceptance"]["replan_count"] == 1
+    assert bridge.moves == [
+        ("robot_1", -2.0, -0.5),
+        ("robot_1", 2.0, 0.5),
+        ("robot_1", 2.0, -1.0),
+    ]
+
+
 class MultiMechanismBridge(Nav2IncidentBridge):
     def __init__(self, cause):
         super().__init__()
