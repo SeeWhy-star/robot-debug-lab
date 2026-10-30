@@ -25,13 +25,13 @@
 
 任务级恢复另有一个真实动态场景：后端通过 Gazebo `set_pose` 把实体 `temporary_crate` 移到货架 A 的默认接近点。首次 Nav2 导航必须实际失败；程序先用新鲜 ROS 状态排除已知系统故障，然后重规划 Agent 读取任务进度和经过审核的候选接近点，只能选择 Nav2 实测可达的替代点。网关保留已完成和后续步骤、记录计划版本，再由 Gazebo 验收重试结果。Agent 看不到场景注入标签，也不能编造坐标。真实结果见[重规划验收记录](docs/replanning-acceptance-results.json)。
 
-故障现在也能在复杂任务执行到第 N 次真实导航时触发。触发计划只存在于确定性实验装置中，不会出现在 Agent 的 ROS 工具结果里。2026-10-30 的实测任务为“障碍箱旁边 → 起点 → 充电站 → 等待”：S1 完成后，第二次导航触发 `bt_navigator inactive`；OpenFang 用 4 次只读工具调用识别 lifecycle 故障，网关执行 `resume_nav2_lifecycle`，仅重放 S2，再继续完成 S3/S4。最终 Gazebo 位置误差为 `0.1018 m`，没有错误修复，详见[任务中途故障记录](docs/mission-fault-evaluation-results.json)。
+故障现在也能在复杂任务执行到第 N 次真实导航时触发。触发计划只存在于确定性实验装置中，不会出现在 Agent 的 ROS 工具结果里。2026-10-30 使用“障碍箱旁边 → 起点 → 充电站 → 等待”完成了 3 轮、3 种故障、AI/规则两种恢复模式，共 18 次真实任务：故障识别率和原任务恢复率均为 100%，每次都保留 S1、恢复 S2 并继续后续步骤，错误修复总数为 0。三轮分别只生成一次复杂计划，轮内六项复用同一份后端验证计划。AI 平均恢复时间为 27.738–46.804 秒，规则为 21.167–37.409 秒；AI 诊断平均消耗 12,094–20,099 tokens，且个别运行存在明显波动。完整数据见[任务中途故障矩阵](docs/mission-fault-evaluation-results.json)。
 
 ## 开发阶段
 
 **第一阶段后端已完成。** 当前具备简单任务零模型解析、复杂任务 ReAct 规划、统一语义场景、多步骤顺序执行、澄清续接、能力缺口协商、可观察仿真充电、取消和最终验收。额外完成了基于真实 Gazebo 障碍与 Nav2 路径证据的受限任务重规划。
 
-**第二阶段已有可运行闭环。** 三种机制不同的 ROS/Nav2 故障、AI/规则对照和自动评测矩阵均已落地；复杂任务中途发生系统故障后，可保留已完成步骤、修复失败步骤并继续后续步骤。当前已完成一组真实 AI 中途故障验收；三种故障的重复组合矩阵仍需继续积累。动态代价地图候选生成、任意条件任务图、重启续跑、多机器人和实体取放仍属于后续范围。
+**第二阶段已有可重复运行的闭环。** 三种机制不同的 ROS/Nav2 故障、AI/规则对照和自动评测矩阵均已落地；复杂任务中途发生系统故障后，可保留已完成步骤、修复失败步骤并继续后续步骤。三轮 18 项真实矩阵已经通过。下一步重点是降低 Agent 调查 token 波动，并增加“路线阻塞 + 系统故障”的组合案例。动态代价地图候选生成、任意条件任务图、重启续跑、多机器人和实体取放仍属于后续范围。
 
 ## 系统结构
 
@@ -100,7 +100,7 @@ AI 模式需要在 `.env` 配置直连模型，或设置 `RDL_AGENT_BACKEND=open
 .venv/bin/python scripts/acceptance_missions.py --reset
 .venv/bin/python scripts/acceptance_replanning.py
 .venv/bin/python scripts/evaluate_fault_matrix.py --mode both
-.venv/bin/python scripts/evaluate_mission_faults.py --fault all --mode both --trials 1
+.venv/bin/python scripts/evaluate_mission_faults.py --fault all --mode both --trials 3 --resume
 ```
 
 ## 真实 Nav2 源码案例

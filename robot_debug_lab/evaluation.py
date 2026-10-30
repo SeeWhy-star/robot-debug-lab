@@ -1,5 +1,7 @@
 """Metrics shared by live fault-matrix evaluation and tests."""
 
+from collections import defaultdict
+
 
 EXPECTED_REPAIRS = {
     "scan_interrupted": "restore_scan_forwarding",
@@ -101,3 +103,43 @@ def evaluate_mission_run(run, expected_fault, recovery_mode, wall_seconds=None):
         "diagnosis_completion_tokens": int(diagnosis_usage.get("completion_tokens", 0)),
         "status": run.get("status"),
     }
+
+
+def summarize_mission_rows(rows):
+    """Aggregate repeated mission-fault trials by recovery mode and mechanism."""
+    groups = defaultdict(list)
+    for row in rows:
+        groups[(row["recovery_mode"], row["fault"])].append(row)
+    summary = []
+    for (mode, fault), group in sorted(groups.items()):
+        count = len(group)
+        summary.append({
+            "recovery_mode": mode,
+            "fault": fault,
+            "trials": count,
+            "identified_rate": round(
+                sum(bool(row["identified_correctly"]) for row in group) / count, 3
+            ),
+            "mission_restore_rate": round(
+                sum(bool(row["original_mission_restored"]) for row in group) / count,
+                3,
+            ),
+            "wrong_repairs": sum(int(row["wrong_repairs"]) for row in group),
+            "average_tool_calls": round(
+                sum(int(row["diagnostic_tool_calls"]) for row in group) / count, 2
+            ),
+            "average_recovery_seconds": round(
+                sum(float(row["investigation_and_recovery_seconds"]) for row in group)
+                / count,
+                3,
+            ),
+            "average_diagnosis_tokens": round(
+                sum(
+                    int(row["diagnosis_prompt_tokens"])
+                    + int(row["diagnosis_completion_tokens"])
+                    for row in group
+                ) / count,
+                2,
+            ),
+        })
+    return summary

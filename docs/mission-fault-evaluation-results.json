@@ -1,8 +1,273 @@
 {
-  "generated_at": 1793343815.0818412,
+  "generated_at": 1793346181.878347,
   "simulation": "gazebo_nav2",
   "prompt": "先去实体障碍箱旁边，然后回起点，最后去充电站等待。",
+  "unique_plan_count": 3,
+  "planning_usage_by_plan": {
+    "d4cf73677974": {
+      "prompt_tokens": 10826,
+      "completion_tokens": 472
+    },
+    "98ec4b05f77e": {
+      "prompt_tokens": 10880,
+      "completion_tokens": 406
+    },
+    "5f194c490c11": {
+      "prompt_tokens": 10848,
+      "completion_tokens": 449
+    }
+  },
+  "summary": [
+    {
+      "recovery_mode": "ai",
+      "fault": "controller_velocity_zero",
+      "trials": 3,
+      "identified_rate": 1.0,
+      "mission_restore_rate": 1.0,
+      "wrong_repairs": 0,
+      "average_tool_calls": 4.0,
+      "average_recovery_seconds": 46.804,
+      "average_diagnosis_tokens": 20098.67
+    },
+    {
+      "recovery_mode": "ai",
+      "fault": "navigator_inactive",
+      "trials": 3,
+      "identified_rate": 1.0,
+      "mission_restore_rate": 1.0,
+      "wrong_repairs": 0,
+      "average_tool_calls": 3.67,
+      "average_recovery_seconds": 27.738,
+      "average_diagnosis_tokens": 12093.67
+    },
+    {
+      "recovery_mode": "ai",
+      "fault": "scan_interrupted",
+      "trials": 3,
+      "identified_rate": 1.0,
+      "mission_restore_rate": 1.0,
+      "wrong_repairs": 0,
+      "average_tool_calls": 3.33,
+      "average_recovery_seconds": 45.715,
+      "average_diagnosis_tokens": 18901.67
+    },
+    {
+      "recovery_mode": "rules",
+      "fault": "controller_velocity_zero",
+      "trials": 3,
+      "identified_rate": 1.0,
+      "mission_restore_rate": 1.0,
+      "wrong_repairs": 0,
+      "average_tool_calls": 2.0,
+      "average_recovery_seconds": 35.523,
+      "average_diagnosis_tokens": 0.0
+    },
+    {
+      "recovery_mode": "rules",
+      "fault": "navigator_inactive",
+      "trials": 3,
+      "identified_rate": 1.0,
+      "mission_restore_rate": 1.0,
+      "wrong_repairs": 0,
+      "average_tool_calls": 2.0,
+      "average_recovery_seconds": 21.167,
+      "average_diagnosis_tokens": 0.0
+    },
+    {
+      "recovery_mode": "rules",
+      "fault": "scan_interrupted",
+      "trials": 3,
+      "identified_rate": 1.0,
+      "mission_restore_rate": 1.0,
+      "wrong_repairs": 0,
+      "average_tool_calls": 2.0,
+      "average_recovery_seconds": 37.409,
+      "average_diagnosis_tokens": 0.0
+    }
+  ],
   "rows": [
+    {
+      "fault": "scan_interrupted",
+      "recovery_mode": "ai",
+      "identified_correctly": true,
+      "original_mission_restored": true,
+      "completed_steps_preserved": [
+        "S1"
+      ],
+      "recovered_step_id": "S2",
+      "wrong_repairs": 0,
+      "repair_operations": [
+        "restore_scan_forwarding"
+      ],
+      "diagnostic_tool_calls": 4,
+      "investigation_and_recovery_seconds": 44.46,
+      "planning_prompt_tokens": 10826,
+      "planning_completion_tokens": 472,
+      "diagnosis_prompt_tokens": 11414,
+      "diagnosis_completion_tokens": 703,
+      "status": "verified",
+      "trial": 1,
+      "run_id": "bdb484fe57e1",
+      "plan_id": "d4cf73677974",
+      "plan_reused": true,
+      "scheduled_navigation_attempt": 2
+    },
+    {
+      "fault": "navigator_inactive",
+      "recovery_mode": "ai",
+      "identified_correctly": true,
+      "original_mission_restored": true,
+      "completed_steps_preserved": [
+        "S1"
+      ],
+      "recovered_step_id": "S2",
+      "wrong_repairs": 0,
+      "repair_operations": [
+        "resume_nav2_lifecycle"
+      ],
+      "diagnostic_tool_calls": 3,
+      "investigation_and_recovery_seconds": 26.791,
+      "planning_prompt_tokens": 10826,
+      "planning_completion_tokens": 472,
+      "diagnosis_prompt_tokens": 11206,
+      "diagnosis_completion_tokens": 733,
+      "status": "verified",
+      "trial": 1,
+      "run_id": "941e25a60ebe",
+      "plan_id": "d4cf73677974",
+      "plan_reused": true,
+      "scheduled_navigation_attempt": 2
+    },
+    {
+      "fault": "controller_velocity_zero",
+      "recovery_mode": "ai",
+      "identified_correctly": true,
+      "original_mission_restored": true,
+      "completed_steps_preserved": [
+        "S1"
+      ],
+      "recovered_step_id": "S2",
+      "wrong_repairs": 0,
+      "repair_operations": [
+        "restore_controller_velocity_limits"
+      ],
+      "diagnostic_tool_calls": 4,
+      "investigation_and_recovery_seconds": 41.363,
+      "planning_prompt_tokens": 10826,
+      "planning_completion_tokens": 472,
+      "diagnosis_prompt_tokens": 11460,
+      "diagnosis_completion_tokens": 657,
+      "status": "verified",
+      "trial": 1,
+      "run_id": "1d022b00ec17",
+      "plan_id": "d4cf73677974",
+      "plan_reused": true,
+      "scheduled_navigation_attempt": 2
+    },
+    {
+      "fault": "scan_interrupted",
+      "recovery_mode": "rules",
+      "identified_correctly": true,
+      "original_mission_restored": true,
+      "completed_steps_preserved": [
+        "S1"
+      ],
+      "recovered_step_id": "S2",
+      "wrong_repairs": 0,
+      "repair_operations": [
+        "restore_scan_forwarding"
+      ],
+      "diagnostic_tool_calls": 2,
+      "investigation_and_recovery_seconds": 37.373,
+      "planning_prompt_tokens": 10826,
+      "planning_completion_tokens": 472,
+      "diagnosis_prompt_tokens": 0,
+      "diagnosis_completion_tokens": 0,
+      "status": "verified",
+      "trial": 1,
+      "run_id": "f1cc4ed779df",
+      "plan_id": "d4cf73677974",
+      "plan_reused": true,
+      "scheduled_navigation_attempt": 2
+    },
+    {
+      "fault": "navigator_inactive",
+      "recovery_mode": "rules",
+      "identified_correctly": true,
+      "original_mission_restored": true,
+      "completed_steps_preserved": [
+        "S1"
+      ],
+      "recovered_step_id": "S2",
+      "wrong_repairs": 0,
+      "repair_operations": [
+        "resume_nav2_lifecycle"
+      ],
+      "diagnostic_tool_calls": 2,
+      "investigation_and_recovery_seconds": 21.733,
+      "planning_prompt_tokens": 10826,
+      "planning_completion_tokens": 472,
+      "diagnosis_prompt_tokens": 0,
+      "diagnosis_completion_tokens": 0,
+      "status": "verified",
+      "trial": 1,
+      "run_id": "319a5e4907f4",
+      "plan_id": "d4cf73677974",
+      "plan_reused": true,
+      "scheduled_navigation_attempt": 2
+    },
+    {
+      "fault": "controller_velocity_zero",
+      "recovery_mode": "rules",
+      "identified_correctly": true,
+      "original_mission_restored": true,
+      "completed_steps_preserved": [
+        "S1"
+      ],
+      "recovered_step_id": "S2",
+      "wrong_repairs": 0,
+      "repair_operations": [
+        "restore_controller_velocity_limits"
+      ],
+      "diagnostic_tool_calls": 2,
+      "investigation_and_recovery_seconds": 35.399,
+      "planning_prompt_tokens": 10826,
+      "planning_completion_tokens": 472,
+      "diagnosis_prompt_tokens": 0,
+      "diagnosis_completion_tokens": 0,
+      "status": "verified",
+      "trial": 1,
+      "run_id": "c9acfa2a5686",
+      "plan_id": "d4cf73677974",
+      "plan_reused": true,
+      "scheduled_navigation_attempt": 2
+    },
+    {
+      "fault": "scan_interrupted",
+      "recovery_mode": "ai",
+      "identified_correctly": true,
+      "original_mission_restored": true,
+      "completed_steps_preserved": [
+        "S1"
+      ],
+      "recovered_step_id": "S2",
+      "wrong_repairs": 0,
+      "repair_operations": [
+        "restore_scan_forwarding"
+      ],
+      "diagnostic_tool_calls": 3,
+      "investigation_and_recovery_seconds": 48.713,
+      "planning_prompt_tokens": 10880,
+      "planning_completion_tokens": 406,
+      "diagnosis_prompt_tokens": 31277,
+      "diagnosis_completion_tokens": 1522,
+      "status": "verified",
+      "trial": 2,
+      "run_id": "8cc274bae9e1",
+      "plan_id": "98ec4b05f77e",
+      "plan_reused": true,
+      "scheduled_navigation_attempt": 2
+    },
     {
       "fault": "navigator_inactive",
       "recovery_mode": "ai",
@@ -17,15 +282,276 @@
         "resume_nav2_lifecycle"
       ],
       "diagnostic_tool_calls": 4,
-      "investigation_and_recovery_seconds": 30.587,
-      "planning_prompt_tokens": 19951,
-      "planning_completion_tokens": 1249,
-      "diagnosis_prompt_tokens": 19852,
-      "diagnosis_completion_tokens": 792,
+      "investigation_and_recovery_seconds": 27.513,
+      "planning_prompt_tokens": 10880,
+      "planning_completion_tokens": 406,
+      "diagnosis_prompt_tokens": 11505,
+      "diagnosis_completion_tokens": 800,
       "status": "verified",
-      "trial": 1,
-      "run_id": "a59a601410aa",
-      "plan_id": "039b12d147e6",
+      "trial": 2,
+      "run_id": "414dc3d41347",
+      "plan_id": "98ec4b05f77e",
+      "plan_reused": true,
+      "scheduled_navigation_attempt": 2
+    },
+    {
+      "fault": "controller_velocity_zero",
+      "recovery_mode": "ai",
+      "identified_correctly": true,
+      "original_mission_restored": true,
+      "completed_steps_preserved": [
+        "S1"
+      ],
+      "recovered_step_id": "S2",
+      "wrong_repairs": 0,
+      "repair_operations": [
+        "restore_controller_velocity_limits"
+      ],
+      "diagnostic_tool_calls": 4,
+      "investigation_and_recovery_seconds": 51.873,
+      "planning_prompt_tokens": 10880,
+      "planning_completion_tokens": 406,
+      "diagnosis_prompt_tokens": 33886,
+      "diagnosis_completion_tokens": 2138,
+      "status": "verified",
+      "trial": 2,
+      "run_id": "d1bce5573108",
+      "plan_id": "98ec4b05f77e",
+      "plan_reused": true,
+      "scheduled_navigation_attempt": 2
+    },
+    {
+      "fault": "scan_interrupted",
+      "recovery_mode": "rules",
+      "identified_correctly": true,
+      "original_mission_restored": true,
+      "completed_steps_preserved": [
+        "S1"
+      ],
+      "recovered_step_id": "S2",
+      "wrong_repairs": 0,
+      "repair_operations": [
+        "restore_scan_forwarding"
+      ],
+      "diagnostic_tool_calls": 2,
+      "investigation_and_recovery_seconds": 37.623,
+      "planning_prompt_tokens": 10880,
+      "planning_completion_tokens": 406,
+      "diagnosis_prompt_tokens": 0,
+      "diagnosis_completion_tokens": 0,
+      "status": "verified",
+      "trial": 2,
+      "run_id": "06932fc83e89",
+      "plan_id": "98ec4b05f77e",
+      "plan_reused": true,
+      "scheduled_navigation_attempt": 2
+    },
+    {
+      "fault": "navigator_inactive",
+      "recovery_mode": "rules",
+      "identified_correctly": true,
+      "original_mission_restored": true,
+      "completed_steps_preserved": [
+        "S1"
+      ],
+      "recovered_step_id": "S2",
+      "wrong_repairs": 0,
+      "repair_operations": [
+        "resume_nav2_lifecycle"
+      ],
+      "diagnostic_tool_calls": 2,
+      "investigation_and_recovery_seconds": 20.673,
+      "planning_prompt_tokens": 10880,
+      "planning_completion_tokens": 406,
+      "diagnosis_prompt_tokens": 0,
+      "diagnosis_completion_tokens": 0,
+      "status": "verified",
+      "trial": 2,
+      "run_id": "c62724c8b0fe",
+      "plan_id": "98ec4b05f77e",
+      "plan_reused": true,
+      "scheduled_navigation_attempt": 2
+    },
+    {
+      "fault": "controller_velocity_zero",
+      "recovery_mode": "rules",
+      "identified_correctly": true,
+      "original_mission_restored": true,
+      "completed_steps_preserved": [
+        "S1"
+      ],
+      "recovered_step_id": "S2",
+      "wrong_repairs": 0,
+      "repair_operations": [
+        "restore_controller_velocity_limits"
+      ],
+      "diagnostic_tool_calls": 2,
+      "investigation_and_recovery_seconds": 35.701,
+      "planning_prompt_tokens": 10880,
+      "planning_completion_tokens": 406,
+      "diagnosis_prompt_tokens": 0,
+      "diagnosis_completion_tokens": 0,
+      "status": "verified",
+      "trial": 2,
+      "run_id": "029a1cea04d2",
+      "plan_id": "98ec4b05f77e",
+      "plan_reused": true,
+      "scheduled_navigation_attempt": 2
+    },
+    {
+      "fault": "scan_interrupted",
+      "recovery_mode": "ai",
+      "identified_correctly": true,
+      "original_mission_restored": true,
+      "completed_steps_preserved": [
+        "S1"
+      ],
+      "recovered_step_id": "S2",
+      "wrong_repairs": 0,
+      "repair_operations": [
+        "restore_scan_forwarding"
+      ],
+      "diagnostic_tool_calls": 3,
+      "investigation_and_recovery_seconds": 43.971,
+      "planning_prompt_tokens": 10848,
+      "planning_completion_tokens": 449,
+      "diagnosis_prompt_tokens": 11130,
+      "diagnosis_completion_tokens": 659,
+      "status": "verified",
+      "trial": 3,
+      "run_id": "3664de0ba79c",
+      "plan_id": "5f194c490c11",
+      "plan_reused": true,
+      "scheduled_navigation_attempt": 2
+    },
+    {
+      "fault": "navigator_inactive",
+      "recovery_mode": "ai",
+      "identified_correctly": true,
+      "original_mission_restored": true,
+      "completed_steps_preserved": [
+        "S1"
+      ],
+      "recovered_step_id": "S2",
+      "wrong_repairs": 0,
+      "repair_operations": [
+        "resume_nav2_lifecycle"
+      ],
+      "diagnostic_tool_calls": 4,
+      "investigation_and_recovery_seconds": 28.909,
+      "planning_prompt_tokens": 10848,
+      "planning_completion_tokens": 449,
+      "diagnosis_prompt_tokens": 11440,
+      "diagnosis_completion_tokens": 597,
+      "status": "verified",
+      "trial": 3,
+      "run_id": "0f30a239cbc0",
+      "plan_id": "5f194c490c11",
+      "plan_reused": true,
+      "scheduled_navigation_attempt": 2
+    },
+    {
+      "fault": "controller_velocity_zero",
+      "recovery_mode": "ai",
+      "identified_correctly": true,
+      "original_mission_restored": true,
+      "completed_steps_preserved": [
+        "S1"
+      ],
+      "recovered_step_id": "S2",
+      "wrong_repairs": 0,
+      "repair_operations": [
+        "restore_controller_velocity_limits"
+      ],
+      "diagnostic_tool_calls": 4,
+      "investigation_and_recovery_seconds": 47.176,
+      "planning_prompt_tokens": 10848,
+      "planning_completion_tokens": 449,
+      "diagnosis_prompt_tokens": 11488,
+      "diagnosis_completion_tokens": 667,
+      "status": "verified",
+      "trial": 3,
+      "run_id": "f2f7e0f1a2d7",
+      "plan_id": "5f194c490c11",
+      "plan_reused": true,
+      "scheduled_navigation_attempt": 2
+    },
+    {
+      "fault": "scan_interrupted",
+      "recovery_mode": "rules",
+      "identified_correctly": true,
+      "original_mission_restored": true,
+      "completed_steps_preserved": [
+        "S1"
+      ],
+      "recovered_step_id": "S2",
+      "wrong_repairs": 0,
+      "repair_operations": [
+        "restore_scan_forwarding"
+      ],
+      "diagnostic_tool_calls": 2,
+      "investigation_and_recovery_seconds": 37.231,
+      "planning_prompt_tokens": 10848,
+      "planning_completion_tokens": 449,
+      "diagnosis_prompt_tokens": 0,
+      "diagnosis_completion_tokens": 0,
+      "status": "verified",
+      "trial": 3,
+      "run_id": "96c377c8a6a0",
+      "plan_id": "5f194c490c11",
+      "plan_reused": true,
+      "scheduled_navigation_attempt": 2
+    },
+    {
+      "fault": "navigator_inactive",
+      "recovery_mode": "rules",
+      "identified_correctly": true,
+      "original_mission_restored": true,
+      "completed_steps_preserved": [
+        "S1"
+      ],
+      "recovered_step_id": "S2",
+      "wrong_repairs": 0,
+      "repair_operations": [
+        "resume_nav2_lifecycle"
+      ],
+      "diagnostic_tool_calls": 2,
+      "investigation_and_recovery_seconds": 21.094,
+      "planning_prompt_tokens": 10848,
+      "planning_completion_tokens": 449,
+      "diagnosis_prompt_tokens": 0,
+      "diagnosis_completion_tokens": 0,
+      "status": "verified",
+      "trial": 3,
+      "run_id": "ba9ece555faa",
+      "plan_id": "5f194c490c11",
+      "plan_reused": true,
+      "scheduled_navigation_attempt": 2
+    },
+    {
+      "fault": "controller_velocity_zero",
+      "recovery_mode": "rules",
+      "identified_correctly": true,
+      "original_mission_restored": true,
+      "completed_steps_preserved": [
+        "S1"
+      ],
+      "recovered_step_id": "S2",
+      "wrong_repairs": 0,
+      "repair_operations": [
+        "restore_controller_velocity_limits"
+      ],
+      "diagnostic_tool_calls": 2,
+      "investigation_and_recovery_seconds": 35.468,
+      "planning_prompt_tokens": 10848,
+      "planning_completion_tokens": 449,
+      "diagnosis_prompt_tokens": 0,
+      "diagnosis_completion_tokens": 0,
+      "status": "verified",
+      "trial": 3,
+      "run_id": "eac42a46d217",
+      "plan_id": "5f194c490c11",
+      "plan_reused": true,
       "scheduled_navigation_attempt": 2
     }
   ],

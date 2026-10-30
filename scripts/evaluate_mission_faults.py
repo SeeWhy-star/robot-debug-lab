@@ -10,7 +10,7 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from robot_debug_lab.evaluation import evaluate_mission_run
+from robot_debug_lab.evaluation import evaluate_mission_run, summarize_mission_rows
 
 
 FAULTS = ("scan_interrupted", "navigator_inactive", "controller_velocity_zero")
@@ -24,11 +24,18 @@ def main():
     parser.add_argument("--mode", choices=["ai", "rules", "both"], default="ai")
     parser.add_argument("--fault", choices=[*FAULTS, "all"], default="all")
     parser.add_argument("--trials", type=int, choices=range(1, 6), default=1)
+    parser.add_argument("--resume", action="store_true")
     parser.add_argument("--output", default="docs/mission-fault-evaluation-results.json")
     args = parser.parse_args()
     modes = ("ai", "rules") if args.mode == "both" else (args.mode,)
     faults = FAULTS if args.fault == "all" else (args.fault,)
+    output = Path(args.output)
     rows = []
+    if args.resume and output.is_file():
+        previous = json.loads(output.read_text())
+        if previous.get("prompt") != PROMPT:
+            raise SystemExit("已有评测文件使用了不同任务，不能续跑")
+        rows = list(previous.get("rows") or [])
 
     with httpx.Client(base_url=args.url, timeout=220) as client:
         state = client.get("/api/state").raise_for_status().json()
@@ -36,6 +43,27 @@ def main():
             raise SystemExit("需要 OpenFang + Nav2/Gazebo 运行环境")
         headers = {"X-Lab-Token": state["token"]}
         for trial in range(1, args.trials + 1):
+            expected_pairs = {(mode, fault) for mode in modes for fault in faults}
+            existing_pairs = {
+                (row["recovery_mode"], row["fault"])
+                for row in rows if row.get("trial") == trial
+            }
+            if expected_pairs <= existing_pairs:
+                print(f"trial {trial} 已完整，跳过")
+                continue
+            # A partial trial cannot be a controlled comparison unless every
+            # row reuses one plan. Discard only that trial and regenerate it.
+            rows = [row for row in rows if row.get("trial") != trial]
+            planned = client.post(
+                "/api/assistant/tasks",
+                headers=headers,
+                json={"prompt": PROMPT, "auto_repair": True, "execute": False},
+            ).raise_for_status().json()
+            plan = planned["plan"]
+            if planned.get("run_ids") or not plan.get("steps"):
+                raise SystemExit("复杂任务只规划请求意外执行或没有生成步骤")
+            if plan.get("backend") == "deterministic":
+                raise SystemExit("复杂任务错误绕过模型规划")
             for mode in modes:
                 for fault in faults:
                     client.post(
@@ -47,19 +75,12 @@ def main():
                         json={"kind": fault, "navigation_attempt": 2},
                     ).raise_for_status().json()
                     response = client.post(
-                        "/api/assistant/tasks",
+                        f"/api/assistant/plans/{plan['id']}/runs",
                         headers=headers,
-                        json={
-                            "prompt": PROMPT,
-                            "auto_repair": True,
-                            "recovery_mode": mode,
-                        },
+                        json={"recovery_mode": mode},
                     ).raise_for_status().json()
                     if not response.get("run_ids"):
-                        raise SystemExit("复杂任务规划未生成可执行步骤")
-                    plan = response["plan"]
-                    if plan.get("backend") == "deterministic":
-                        raise SystemExit("复杂任务错误绕过模型规划")
+                        raise SystemExit("已验证计划未生成任务运行")
                     run_id = response["run_ids"][0]
                     deadline = time.monotonic() + 210
                     while True:
@@ -76,6 +97,7 @@ def main():
                         trial=trial,
                         run_id=run_id,
                         plan_id=plan["id"],
+                        plan_reused=True,
                         scheduled_navigation_attempt=schedule["navigation_attempt"],
                     )
                     rows.append(row)
@@ -85,6 +107,15 @@ def main():
         "generated_at": time.time(),
         "simulation": "gazebo_nav2",
         "prompt": PROMPT,
+        "unique_plan_count": len({row["plan_id"] for row in rows}),
+        "planning_usage_by_plan": {
+            row["plan_id"]: {
+                "prompt_tokens": row["planning_prompt_tokens"],
+                "completion_tokens": row["planning_completion_tokens"],
+            }
+            for row in rows
+        },
+        "summary": summarize_mission_rows(rows),
         "rows": rows,
         "all_identified": all(row["identified_correctly"] for row in rows),
         "all_missions_restored": all(
@@ -98,7 +129,6 @@ def main():
             for row in rows
         ),
     }
-    output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
     if not all(

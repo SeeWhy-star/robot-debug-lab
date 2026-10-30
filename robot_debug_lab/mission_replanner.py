@@ -190,13 +190,13 @@ class MissionReplanner:
                 for key in ["prompt_tokens", "completion_tokens"]:
                     run["usage"][key] += int(usage.get(key, 0))
                 self.store.save(run)
-                messages.append(message)
                 calls = message.get("tool_calls") or []
                 if not calls or len(calls) > 3:
                     messages.append({
                         "role": "user", "content": "调用观察工具并用 finish_replan 结束。"
                     })
                     continue
+                messages.append(message)
                 for call in calls:
                     name = call["function"]["name"]
                     try:

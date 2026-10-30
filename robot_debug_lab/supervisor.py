@@ -367,11 +367,11 @@ class Supervisor:
                     continue
                 for key in usage:
                     usage[key] += int(used.get(key, 0))
-                messages.append(message)
                 calls = message.get("tool_calls") or []
                 if not calls or len(calls) > 6:
                     messages.append({"role": "user", "content": "请只调用给定工具，并用 finish_plan 结束。"})
                     continue
+                messages.append(message)
                 for call in calls:
                     name = call["function"]["name"]
                     try:

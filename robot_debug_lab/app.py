@@ -81,6 +81,11 @@ class AssistantRequest(BaseModel):
     auto_repair: bool = True
     parent_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{12}$")
     recovery_mode: Literal["ai", "rules"] = "ai"
+    execute: bool = True
+
+
+class StoredPlanRun(BaseModel):
+    recovery_mode: Literal["ai", "rules"] = "ai"
 
 
 class Target(BaseModel):
@@ -265,17 +270,46 @@ def assistant_task(q: AssistantRequest):
         raise HTTPException(409, str(e))
     if plan["status"] == "needs_clarification":
         return {"plan": plan, "run_ids": []}
+    if not q.execute:
+        return {"plan": plan, "run_ids": []}
+    return _dispatch_plan(plan, q.recovery_mode)
+
+
+def _validate_stored_plan(plan):
+    if plan.get("status") not in {"ready", "dispatched"} or not plan.get("steps"):
+        raise ValueError("只能执行后端已验证且包含步骤的计划")
+    scene = app.state.supervisor.scene
+    for step in plan["steps"]:
+        destination = step.get("destination_id")
+        if not destination:
+            continue
+        approach_id = step.get("approach_id")
+        if not approach_id:
+            raise ValueError("存储计划缺少语义接近点，请重新规划")
+        try:
+            current = scene.get_approach_pose(destination, approach_id)["pose"]
+        except ValueError:
+            raise ValueError("语义场景已变化，请重新规划") from None
+        if any(
+            abs(float(step[axis]) - float(current[axis])) > 1e-6
+            for axis in ("x", "y")
+        ):
+            raise ValueError("语义场景坐标已变化，请重新规划")
+
+
+def _dispatch_plan(plan, recovery_mode):
     try:
-        run = app.state.workflow.submit_mission(plan, q.recovery_mode)
+        _validate_stored_plan(plan)
+        run = app.state.workflow.submit_mission(plan, recovery_mode)
     except Exception as e:
-        plan["status"] = "rejected"
-        app.state.store.save_plan(plan)
         if isinstance(e, ValueError):
             raise HTTPException(409, str(e))
         raise
-    plan.update(status="dispatched", run_ids=[run["id"]])
+    run_ids = list(plan.get("run_ids") or [])
+    run_ids.append(run["id"])
+    plan.update(status="dispatched", run_ids=run_ids)
     app.state.store.save_plan(plan)
-    return {"plan": plan, "run_ids": plan["run_ids"]}
+    return {"plan": plan, "run_ids": [run["id"]]}
 
 
 @app.get("/api/assistant/plans/{pid}")
@@ -284,6 +318,14 @@ def get_plan(pid: str):
     if plan is None:
         raise HTTPException(404, "Plan not found")
     return plan
+
+
+@app.post("/api/assistant/plans/{pid}/runs")
+def run_stored_plan(pid: str, request: StoredPlanRun):
+    plan = app.state.store.get_plan(pid)
+    if plan is None:
+        raise HTTPException(404, "Plan not found")
+    return _dispatch_plan(plan, request.recovery_mode)
 
 
 @app.post("/api/runs/{rid}/cancel")

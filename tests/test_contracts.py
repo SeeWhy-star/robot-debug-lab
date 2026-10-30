@@ -1,3 +1,4 @@
+import json
 import threading
 import time
 
@@ -45,6 +46,60 @@ def test_agent_tools_are_read_only_and_robot_scoped(tmp_path):
     with pytest.raises(ValueError):
         agent.tool("repair_scan", run)
     assert agent.tool("inspect_graph", run)["data"]["robot_id"] == "robot_1"
+
+
+def test_free_text_model_retry_does_not_pollute_next_diagnosis_context(tmp_path):
+    class FreeTextThenFinish:
+        def __init__(self):
+            self.round = 0
+
+        def complete(self, messages, tools):
+            self.round += 1
+            if self.round == 1:
+                return {"role": "assistant", "content": "INVALID_BLOAT" * 1000}, {
+                    "prompt_tokens": 10, "completion_tokens": 1000,
+                }
+            assert not any(
+                "INVALID_BLOAT" in str(message.get("content", ""))
+                for message in messages
+            )
+            if self.round == 2:
+                return {
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "id": "parameters",
+                        "type": "function",
+                        "function": {"name": "read_parameters", "arguments": "{}"},
+                    }],
+                }, {"prompt_tokens": 20, "completion_tokens": 10}
+            evidence_id = json.loads(messages[-1]["content"])["id"]
+            return {
+                "role": "assistant",
+                "tool_calls": [{
+                    "id": "finish",
+                    "type": "function",
+                    "function": {
+                        "name": "finish_diagnosis",
+                        "arguments": (
+                            '{"cause":"scan_interrupted","summary":"链路中断",'
+                                f'"evidence_ids":["{evidence_id}"],'
+                                '"repair_rationale":"恢复转发"}'
+                        ),
+                    },
+                }],
+            }, {"prompt_tokens": 20, "completion_tokens": 10}
+
+    store = Store(tmp_path / "retry.sqlite")
+    run = store.new("robot_1", "ai", "调查导航失败")
+    model = FreeTextThenFinish()
+    agent = RobotAgent(Observations(), store, model=model, robot="robot_1")
+
+    result = agent.diagnose(run, threading.Event())
+
+    assert result["cause"] == "scan_interrupted"
+    assert model.round == 3
+    warnings = [event for event in run["events"] if event["kind"] == "warning"]
+    assert warnings[-1]["data"]["fallback"] is False
 
 
 @pytest.mark.parametrize("value", ["robot_2", "../robot_1", ""])
@@ -134,6 +189,44 @@ def test_mid_mission_evaluation_separates_planning_and_diagnosis_usage():
     assert result["investigation_and_recovery_seconds"] == 8.0
     assert result["planning_prompt_tokens"] == 100
     assert result["diagnosis_prompt_tokens"] == 50
+
+
+def test_repeated_mission_evaluation_summary_groups_mode_and_fault():
+    from robot_debug_lab.evaluation import summarize_mission_rows
+
+    base = {
+        "fault": "scan_interrupted",
+        "identified_correctly": True,
+        "original_mission_restored": True,
+        "wrong_repairs": 0,
+        "diagnostic_tool_calls": 4,
+        "investigation_and_recovery_seconds": 10.0,
+        "diagnosis_prompt_tokens": 100,
+        "diagnosis_completion_tokens": 20,
+    }
+    rows = [
+        {**base, "recovery_mode": "ai"},
+        {
+            **base, "recovery_mode": "ai", "diagnostic_tool_calls": 2,
+            "investigation_and_recovery_seconds": 14.0,
+            "diagnosis_prompt_tokens": 80,
+        },
+        {
+            **base, "recovery_mode": "rules", "diagnostic_tool_calls": 2,
+            "diagnosis_prompt_tokens": 0, "diagnosis_completion_tokens": 0,
+        },
+    ]
+
+    summary = summarize_mission_rows(rows)
+    ai = next(row for row in summary if row["recovery_mode"] == "ai")
+    rules = next(row for row in summary if row["recovery_mode"] == "rules")
+    assert ai["trials"] == 2
+    assert ai["identified_rate"] == 1.0
+    assert ai["mission_restore_rate"] == 1.0
+    assert ai["average_tool_calls"] == 3.0
+    assert ai["average_recovery_seconds"] == 12.0
+    assert ai["average_diagnosis_tokens"] == 110.0
+    assert rules["average_diagnosis_tokens"] == 0.0
 
 
 def test_nav2_parameter_rewrite_only_changes_exact_scan_inputs():

@@ -226,10 +226,12 @@ class RobotAgent:
             for k in ["prompt_tokens", "completion_tokens"]:
                 r["usage"][k] += int(usage.get(k, 0))
             self.store.save(r)
-            # Preserve protocol fields (including provider reasoning if required) in memory only.
-            messages.append(message)
             calls = message.get("tool_calls") or []
             if not calls:
+                self.store.event(
+                    r, "warning", "模型未调用调查工具，压缩上下文后重试",
+                    {"round": step + 1, "fallback": False},
+                )
                 messages.append(
                     {
                         "role": "user",
@@ -239,6 +241,10 @@ class RobotAgent:
                 continue
             if len(calls) > 5:
                 raise ModelError("Model exceeded per-round tool limit")
+            # Preserve protocol fields (including provider reasoning if
+            # required) only for a valid tool turn. Free-text failures can be
+            # very large and add no evidence to the next retry.
+            messages.append(message)
             for call in calls:
                 if cancel.is_set():
                     raise Canceled()
