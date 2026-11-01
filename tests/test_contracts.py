@@ -289,6 +289,18 @@ def test_nav2_parameter_rewrite_disables_shared_amcl_pose_file_writes():
     assert "save_pose_rate: 0.0" in rewritten
 
 
+def test_nav2_parameter_rewrite_keeps_rechecking_a_tighter_xy_goal():
+    from robot_debug_lab.nav2_bridge import rewrite_nav2_params
+
+    rewritten = rewrite_nav2_params(
+        "controller:\n  general_goal_checker:\n    stateful: true\n"
+        "    xy_goal_tolerance: 0.25\n"
+    )
+
+    assert "stateful: false" in rewritten
+    assert "xy_goal_tolerance: 0.15" in rewritten
+
+
 class FabricatedEvidence:
     def complete(self, messages, tools):
         return {
@@ -353,6 +365,128 @@ def test_localization_health_compares_amcl_with_gazebo_truth():
     assert health["position_error"] == 0.8
     runtime.pose["x"] = 1.1
     assert bridge.localization_health("robot_1")["status"] == "aligned"
+
+
+def test_scan_repair_waits_for_stable_stream_and_clears_stale_costmaps(monkeypatch):
+    from robot_debug_lab import nav2_bridge
+    from robot_debug_lab.nav2_bridge import Nav2Bridge
+
+    class ClearClient:
+        def __init__(self):
+            self.calls = 0
+
+        def wait_for_service(self, timeout_sec):
+            return True
+
+        def call_async(self, request):
+            self.calls += 1
+            return SimpleNamespace(success=True)
+
+    bridge = Nav2Bridge.__new__(Nav2Bridge)
+    bridge.data_lock = threading.RLock()
+    local, global_ = ClearClient(), ClearClient()
+    runtime = SimpleNamespace(
+        scan_forwarding=False,
+        local_costmap_clear_client=local,
+        global_costmap_clear_client=global_,
+    )
+    bridge.robots = {"robot_1": runtime}
+    bridge.ClearEntireCostmap = SimpleNamespace(Request=lambda: object())
+    bridge._wait = lambda future, timeout: future
+    readings = iter([
+        {"raw_scan_hz": 5.0, "nav2_scan_hz": 0.0, "scan_forwarding": True},
+        {"raw_scan_hz": 5.0, "nav2_scan_hz": 0.5, "scan_forwarding": True},
+        {"raw_scan_hz": 5.0, "nav2_scan_hz": 3.0, "scan_forwarding": True},
+        {"raw_scan_hz": 5.0, "nav2_scan_hz": 5.0, "scan_forwarding": True},
+    ])
+    bridge.topic_health = lambda robot: next(readings)
+    monkeypatch.setattr(nav2_bridge.time, "sleep", lambda _: None)
+
+    result = bridge.repair("robot_1", "scan_interrupted")
+
+    assert runtime.scan_forwarding is True
+    assert result["nav2_scan_hz"] == 5.0
+    assert result["stale_costmaps_cleared"] == {"local": True, "global": True}
+    assert local.calls == global_.calls == 1
+
+
+def test_sim_start_waits_for_active_amcl_before_seeding_then_waits_for_nav2():
+    from robot_debug_lab.nav2_bridge import Nav2Bridge
+
+    bridge = Nav2Bridge.__new__(Nav2Bridge)
+    bridge.robot_ids = ("robot_1", "robot_2")
+    bridge.params = object()
+    bridge.sim = SimpleNamespace(poll=lambda: None)
+    bridge._spawn_sim = lambda params: bridge.sim
+    runtimes = {
+        robot: SimpleNamespace(
+            client=SimpleNamespace(wait_for_server=lambda timeout_sec: True)
+        )
+        for robot in bridge.robot_ids
+    }
+    bridge._rt = lambda robot: runtimes[robot]
+    order = []
+    bridge._wait_amcl_active = lambda robot: order.append(("amcl", robot))
+    bridge._wait_nav2_active = lambda robot: order.append(("active", robot))
+    bridge._set_initial_pose = lambda robot: order.append(("pose", robot))
+
+    bridge._start_sim()
+
+    assert order == [
+        ("amcl", "robot_1"), ("amcl", "robot_2"),
+        ("pose", "robot_1"), ("pose", "robot_2"),
+        ("active", "robot_1"), ("active", "robot_2"),
+    ]
+
+
+def test_reset_refreshes_nav2_action_clients_before_starting_sim(monkeypatch):
+    from robot_debug_lab import nav2_bridge
+    from robot_debug_lab.nav2_bridge import Nav2Bridge
+
+    created = []
+
+    class OldClient:
+        def __init__(self, name):
+            self.name = name
+            self.destroyed = False
+
+        def destroy(self):
+            self.destroyed = True
+
+    class NewClient:
+        def __init__(self, node, action_type, name):
+            self.node = node
+            self.action_type = action_type
+            self.name = name
+            created.append(name)
+
+    bridge = Nav2Bridge.__new__(Nav2Bridge)
+    bridge.robot_ids = ("robot_1", "robot_2")
+    bridge.node = object()
+    bridge.NavigateToPose = object()
+    bridge.ComputePathToPose = object()
+    runtimes = {
+        robot: SimpleNamespace(
+            client=OldClient(f"{robot}-navigate"),
+            path_client=OldClient(f"{robot}-path"),
+        )
+        for robot in bridge.robot_ids
+    }
+    old_clients = [
+        client
+        for runtime in runtimes.values()
+        for client in (runtime.client, runtime.path_client)
+    ]
+    bridge._rt = lambda robot: runtimes[robot]
+    monkeypatch.setattr(nav2_bridge, "ActionClient", NewClient)
+
+    bridge._refresh_action_clients()
+
+    assert all(client.destroyed for client in old_clients)
+    assert created == [
+        "/robot_1/navigate_to_pose", "/robot_1/compute_path_to_pose",
+        "/robot_2/navigate_to_pose", "/robot_2/compute_path_to_pose",
+    ]
 
 
 @pytest.mark.parametrize(

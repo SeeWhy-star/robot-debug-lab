@@ -18,7 +18,7 @@ from .workflow import Workflow
 from .supervisor import Supervisor
 from .mission_replanner import MissionReplanner
 from .agents import ModelError
-from .fleet import FleetSupervisor
+from .fleet import FleetSupervisor, explicit_coordinates
 
 
 @asynccontextmanager
@@ -326,15 +326,84 @@ def fleet_task(q: FleetRequest):
         )
         if not q.execute:
             return {"plan": plan, "run_ids": []}
-        runs = app.state.workflow.submit_fleet(plan, q.recovery_mode)
+        return _dispatch_fleet_plan(plan, q.recovery_mode)
     except ModelError as error:
         raise HTTPException(502, str(error)) from None
     except ValueError as error:
         raise HTTPException(409, str(error)) from None
-    run_ids = [run["id"] for run in runs]
-    plan.update(status="dispatched", run_ids=run_ids)
+
+
+def _validate_stored_fleet_plan(plan):
+    """Revalidate every stored assignment against current trusted scene data."""
+    if (
+        plan.get("plan_type") != "fleet"
+        or plan.get("status") not in {"ready", "dispatched"}
+        or not plan.get("assignments")
+    ):
+        raise ValueError("只能执行后端已验证且包含分工的车队计划")
+    assignments = plan["assignments"]
+    robots = [item.get("robot_id") for item in assignments]
+    if len(assignments) > 2 or len(set(robots)) != len(robots):
+        raise ValueError("存储车队计划包含无效机器人分工，请重新规划")
+    scene = app.state.supervisor.scene
+    coordinates = explicit_coordinates(plan.get("request_text", ""))
+    from .config import ROBOT_STARTS, ROBOTS
+
+    for assignment in assignments:
+        robot = assignment.get("robot_id")
+        if robot not in ROBOTS or not assignment.get("steps"):
+            raise ValueError("存储车队计划包含无效机器人分工，请重新规划")
+        for step in assignment["steps"]:
+            if step.get("action") not in {
+                "navigate", "wait", "return_to_start", "enter_idle", "simulate_charge"
+            }:
+                raise ValueError("存储车队计划包含不支持的步骤，请重新规划")
+            if step.get("action") not in {"navigate", "return_to_start"}:
+                continue
+            destination = step.get("destination_id")
+            if destination == "start" or step.get("action") == "return_to_start":
+                x, y, _ = ROBOT_STARTS[robot]
+                expected = {"x": x, "y": y}
+            elif destination:
+                approach_id = step.get("approach_id")
+                if not approach_id:
+                    raise ValueError("存储车队计划缺少语义接近点，请重新规划")
+                try:
+                    expected = scene.get_approach_pose(destination, approach_id)["pose"]
+                except ValueError:
+                    raise ValueError("语义场景已变化，请重新规划") from None
+            else:
+                try:
+                    point = (float(step["x"]), float(step["y"]))
+                except (KeyError, TypeError, ValueError):
+                    raise ValueError("存储车队计划包含无效坐标，请重新规划") from None
+                if point not in coordinates:
+                    raise ValueError("存储车队计划包含未经用户明确提供的坐标")
+                expected = {"x": point[0], "y": point[1]}
+            try:
+                changed = any(
+                    abs(float(step[axis]) - float(expected[axis])) > 1e-6
+                    for axis in ("x", "y")
+                )
+            except (KeyError, TypeError, ValueError):
+                raise ValueError("存储车队计划包含无效坐标，请重新规划") from None
+            if changed:
+                raise ValueError("车队语义场景坐标已变化，请重新规划")
+
+
+def _dispatch_fleet_plan(plan, recovery_mode):
+    try:
+        _validate_stored_fleet_plan(plan)
+        runs = app.state.workflow.submit_fleet(plan, recovery_mode)
+    except Exception as error:
+        if isinstance(error, ValueError):
+            raise HTTPException(409, str(error))
+        raise
+    current_ids = list(plan.get("run_ids") or [])
+    new_ids = [run["id"] for run in runs]
+    plan.update(status="dispatched", run_ids=current_ids + new_ids)
     app.state.store.save_plan(plan)
-    return {"plan": plan, "run_ids": run_ids}
+    return {"plan": plan, "run_ids": new_ids}
 
 
 def _validate_stored_plan(plan):
@@ -395,6 +464,14 @@ def run_stored_plan(pid: str, request: StoredPlanRun):
     if plan is None:
         raise HTTPException(404, "Plan not found")
     return _dispatch_plan(plan, request.recovery_mode)
+
+
+@app.post("/api/fleet/plans/{pid}/runs")
+def run_stored_fleet_plan(pid: str, request: StoredPlanRun):
+    plan = app.state.store.get_plan(pid)
+    if plan is None:
+        raise HTTPException(404, "Plan not found")
+    return _dispatch_fleet_plan(plan, request.recovery_mode)
 
 
 @app.post("/api/runs/{rid}/cancel")

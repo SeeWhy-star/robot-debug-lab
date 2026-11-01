@@ -153,7 +153,9 @@ actions are navigate, wait, return_to_start, enter_idle and simulate_charge. The
 shared charging station, so never send both robots there concurrently. Charging is explicitly simulated
 and simulate_charge must immediately follow navigation to charging_station. Unsupported pickup, storage
 or manipulation must not be faked. Shell, velocity control, parameter changes and arbitrary tools are
-forbidden. Return at most eight steps per robot and never claim that execution already happened."""
+forbidden. Words such as 原地, 当前位置 and current position refer to the robot's live pose: wait and
+enter_idle use destination_id=null and those words are not scene destinations. Return at most eight
+steps per robot and never claim that execution already happened."""
 
 
 class FleetSupervisor:
@@ -195,6 +197,23 @@ class FleetSupervisor:
                 ]
             }
         raise ValueError("invalid or unauthorized fleet tool")
+
+    def _recoverable_unresolved_query(self, query):
+        """Separate planner phrasing errors from genuinely unknown objects."""
+        normalized = self.mission_supervisor.scene._normalize(query)
+        if normalized in {
+            "原地", "当前位置", "当前地点", "这里", "此处",
+            "currentposition", "currentlocation", "here",
+        }:
+            return True
+        for item in self.mission_supervisor.scene.list_scene_objects():
+            aliases = [item["object_id"], item["label"], *item.get("aliases", [])]
+            if any(
+                self.mission_supervisor.scene._normalize(alias) in normalized
+                for alias in aliases
+            ):
+                return True
+        return False
 
     def _materialize(self, draft, auto_repair):
         assignments = []
@@ -243,6 +262,7 @@ class FleetSupervisor:
             usage = {"prompt_tokens": 0, "completion_tokens": 0}
             fleet_observed = False
             observed_objects = set()
+            unresolved_queries = set()
             trace = []
             seen = set()
             for _ in range(10):
@@ -284,6 +304,8 @@ class FleetSupervisor:
                             })
                             retry = True
                             break
+                        if unresolved_queries:
+                            raise ValueError("车队任务包含未登记地点，请先明确目标")
                         for assignment in draft.assignments:
                             if self.bridge.locks[assignment.robot_id].locked():
                                 raise ValueError(f"{assignment.robot_id} 正在执行任务")
@@ -316,8 +338,19 @@ class FleetSupervisor:
                             item["object_id"] for item in result["results"]
                             if item.get("resolved")
                         )
-                        if any(not item.get("resolved") for item in result["results"]):
-                            raise ValueError("车队任务包含未登记地点，请先明确目标")
+                        unresolved = [
+                            item["query"] for item in result["results"]
+                            if not item.get("resolved")
+                        ]
+                        unresolved_queries.update(
+                            query for query in unresolved
+                            if not self._recoverable_unresolved_query(query)
+                        )
+                        if unresolved:
+                            result["instruction"] = (
+                                "未解析项不能作为导航目标。原地/当前位置等待请使用"
+                                "destination_id=null；已登记对象请改用其准确名称重新查询。"
+                            )
                     trace.append({"name": name, "arguments": args, "result": result})
                     messages.append({
                         "role": "tool", "tool_call_id": call["id"],

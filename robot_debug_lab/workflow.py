@@ -481,7 +481,9 @@ class Workflow:
         r["status"] = "repairing"
         self.store.save(r)
         repair = self.bridge.repair(rid, diagnosis["cause"])
+        repair["cause"] = diagnosis["cause"]
         step["repair"] = repair
+        step["repair_chain"] = [repair]
         self.store.event(r, "repair", f"{step['id']} 执行白名单修复", repair)
         if cancel.is_set():
             raise Canceled()
@@ -507,6 +509,73 @@ class Workflow:
         current = self.bridge.snapshot(rid)
         params = self.bridge.parameters(rid)
         post_repair_cause = infer(current, params)
+        if (
+            post_repair_cause not in {"healthy", "unknown", diagnosis["cause"]}
+            and step.get("auto_repair", False)
+        ):
+            # A real replay can expose a second mechanism (for example AMCL
+            # drift after restoring a stale scan pipeline). Permit one more
+            # evidence-gated stage; never loop or infer success from Nav2's
+            # action status without Gazebo truth.
+            r["status"] = "investigating"
+            transition_evidence = self.store.event(
+                r, "failure_transition", f"{step['id']} 重放暴露第二故障机制", {
+                    "previous_cause": diagnosis["cause"],
+                    "observed_cause": post_repair_cause,
+                    "gazebo_validation": validation,
+                    "fresh_snapshot": current,
+                },
+            )
+            secondary = self.agents[rid].diagnose(r, cancel)
+            step.setdefault("secondary_diagnoses", []).append(secondary)
+            self.store.event(
+                r, "diagnosis", f"{step['id']} 二阶段故障判断与证据", secondary
+            )
+            if cancel.is_set():
+                raise Canceled()
+            fresh = self.bridge.snapshot(rid)
+            fresh_params = self.bridge.parameters(rid)
+            if (
+                secondary["cause"] != post_repair_cause
+                or infer(fresh, fresh_params) != secondary["cause"]
+            ):
+                step["failure_reason"] = "二阶段诊断与新鲜现场证据不一致"
+                self.store.event(r, "guard", f"{step['id']} 二阶段修复被拒绝", {
+                    "transition_evidence_id": transition_evidence["id"],
+                    "observed_cause": infer(fresh, fresh_params),
+                    "proposed_cause": secondary["cause"],
+                })
+                return False
+            r["status"] = "repairing"
+            self.store.save(r)
+            secondary_repair = self.bridge.repair(rid, secondary["cause"])
+            secondary_repair["cause"] = secondary["cause"]
+            step["repair_chain"].append(secondary_repair)
+            self.store.event(
+                r, "repair", f"{step['id']} 执行二阶段白名单修复", secondary_repair
+            )
+            r["status"] = "validating"
+            self.store.save(r)
+            validation = self._navigate_with_traffic(
+                r, step, cancel, "secondary_repair_replay"
+            )
+            step.setdefault("attempts", []).append({
+                "target": target,
+                "approach_id": step.get("approach_id"),
+                "phase": "secondary_repair_replay",
+                "result": validation,
+            })
+            step["validation"] = validation
+            step["secondary_repair_validation"] = validation
+            r["validation"] = validation
+            self.store.event(
+                r, "validation", f"{step['id']} 二阶段Gazebo独立位置验收", validation
+            )
+            if validation["success"]:
+                return True
+            current = self.bridge.snapshot(rid)
+            params = self.bridge.parameters(rid)
+            post_repair_cause = infer(current, params)
         if post_repair_cause == "healthy":
             evidence = self.store.event(
                 r, "route_preflight", f"{step['id']} 修复后导航栈复检", {

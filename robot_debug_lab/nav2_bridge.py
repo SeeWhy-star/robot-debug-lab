@@ -57,11 +57,26 @@ def rewrite_nav2_params(text):
     )
     # Each AMCL instance otherwise races while renaming the same default
     # /tmp/amcl_saved_pose file. This lab explicitly seeds every start/reset.
-    return re.sub(
+    text = re.sub(
         r"^(\s*save_pose_rate:\s*)[0-9.]+\s*$",
         r"\g<1>0.0",
         text,
         flags=re.MULTILINE,
+    )
+    # Stateful goal checking can remember that XY was reached while the robot
+    # rotates, even after localization moves the physical pose outside the
+    # tolerance. Keep checking XY and use a tighter Nav2 tolerance than the
+    # independent 0.35 m Gazebo acceptance boundary.
+    text = re.sub(
+        r"(general_goal_checker:\s*\n\s*)stateful:\s*true",
+        r"\1stateful: false",
+        text,
+    )
+    return re.sub(
+        r"(general_goal_checker:[\s\S]*?xy_goal_tolerance:\s*)[0-9.]+",
+        r"\g<1>0.15",
+        text,
+        count=1,
     )
 
 
@@ -71,7 +86,7 @@ class Nav2Bridge:
     def __init__(self):
         try:
             from nav2_msgs.action import ComputePathToPose, NavigateToPose
-            from nav2_msgs.srv import ManageLifecycleNodes
+            from nav2_msgs.srv import ClearEntireCostmap, ManageLifecycleNodes
         except ImportError as error:
             raise RuntimeError(
                 "缺少 Nav2/Gazebo。请运行 bash scripts/install_nav2_sim.sh"
@@ -79,6 +94,7 @@ class Nav2Bridge:
 
         self.NavigateToPose = NavigateToPose
         self.ComputePathToPose = ComputePathToPose
+        self.ClearEntireCostmap = ClearEntireCostmap
         self.ManageLifecycleNodes = ManageLifecycleNodes
         rclpy.init(signal_handler_options=rclpy.signals.SignalHandlerOptions.NO)
         self.node = Node(
@@ -131,6 +147,9 @@ class Nav2Bridge:
             runtime.lifecycle_client = self.node.create_client(
                 GetState, f"{prefix}/bt_navigator/get_state"
             )
+            runtime.amcl_lifecycle_client = self.node.create_client(
+                GetState, f"{prefix}/amcl/get_state"
+            )
             runtime.lifecycle_change_client = self.node.create_client(
                 ChangeState, f"{prefix}/bt_navigator/change_state"
             )
@@ -142,6 +161,14 @@ class Nav2Bridge:
             )
             runtime.lifecycle_manager_client = self.node.create_client(
                 ManageLifecycleNodes, f"{prefix}/lifecycle_manager_nav2/manage_nodes"
+            )
+            runtime.local_costmap_clear_client = self.node.create_client(
+                ClearEntireCostmap,
+                f"{prefix}/local_costmap/clear_entirely_local_costmap",
+            )
+            runtime.global_costmap_clear_client = self.node.create_client(
+                ClearEntireCostmap,
+                f"{prefix}/global_costmap/clear_entirely_global_costmap",
             )
             self.robots[robot] = runtime
             self.node.create_subscription(
@@ -211,9 +238,54 @@ class Nav2Bridge:
                         "Nav2/Gazebo 启动失败，请查看 .runtime/nav2-simulation.log"
                     )
                 raise RuntimeError(f"{robot} Nav2 导航服务在 60 秒内未就绪")
+        # The action server can be discoverable while AMCL is still inactive,
+        # but the rest of Nav2 cannot activate until AMCL publishes map->odom.
+        # Seed after AMCL itself is active, then wait for the whole stack.
+        for robot in self.robot_ids:
+            self._wait_amcl_active(robot)
         for robot in self.robot_ids:
             self._set_initial_pose(robot)
+        for robot in self.robot_ids:
             self._wait_nav2_active(robot)
+
+    def _refresh_action_clients(self):
+        """Discard DDS endpoints from the previous Nav2 process.
+
+        A client object can briefly keep the old action server discovery state
+        after a rapid shared-world reset.  Reusing it may let readiness checks
+        pass while the first goal is still sent to a dead endpoint.  Recreate
+        both action clients while Nav2 is stopped so the next launch performs
+        fresh discovery.
+        """
+        for robot in self.robot_ids:
+            runtime = self._rt(robot)
+            runtime.client.destroy()
+            runtime.path_client.destroy()
+            prefix = f"/{robot}"
+            runtime.client = ActionClient(
+                self.node, self.NavigateToPose, f"{prefix}/navigate_to_pose"
+            )
+            runtime.path_client = ActionClient(
+                self.node, self.ComputePathToPose,
+                f"{prefix}/compute_path_to_pose",
+            )
+
+    def _wait_amcl_active(self, robot, timeout=45):
+        rt = self._rt(robot)
+        if not rt.amcl_lifecycle_client.wait_for_service(timeout_sec=timeout):
+            raise RuntimeError(f"{robot} AMCL 生命周期服务未就绪")
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                state = self._wait(
+                    rt.amcl_lifecycle_client.call_async(GetState.Request()), timeout=3
+                )
+                if state.current_state.label == "active":
+                    return
+            except TimeoutError:
+                pass
+            time.sleep(0.3)
+        raise RuntimeError(f"{robot} AMCL 在限定时间内未进入 active 状态")
 
     def _wait_nav2_active(self, robot, timeout=45):
         """Wait for the action server to be usable, not merely discoverable."""
@@ -270,11 +342,18 @@ class Nav2Bridge:
         message.pose.covariance[0] = 0.25
         message.pose.covariance[7] = 0.25
         message.pose.covariance[35] = 0.07
-        deadline = time.monotonic() + 15
+        deadline = time.monotonic() + 20
         while rt.pose is None and time.monotonic() < deadline:
-            message.header.stamp = self.node.get_clock().now().to_msg()
-            rt.initial_pose_pub.publish(message)
-            time.sleep(0.5)
+            # A continuous 2 Hz reset can starve AMCL before its next scan
+            # update. Publish a short reliable burst, then leave a convergence
+            # window before deciding whether another burst is needed.
+            for _ in range(3):
+                message.header.stamp = self.node.get_clock().now().to_msg()
+                rt.initial_pose_pub.publish(message)
+                time.sleep(0.15)
+            settle_until = min(deadline, time.monotonic() + 1.5)
+            while rt.pose is None and time.monotonic() < settle_until:
+                time.sleep(0.1)
         if rt.pose is None:
             raise RuntimeError(
                 f"{robot} Nav2 已启动但定位未就绪，请查看 .runtime/nav2-simulation.log"
@@ -652,6 +731,7 @@ class Nav2Bridge:
         for rid in self.robot_ids:
             self.stop(rid)
         self._stop_sim()
+        self._refresh_action_clients()
         with self.data_lock:
             for runtime in self.robots.values():
                 runtime.scan_forwarding = True
@@ -662,7 +742,23 @@ class Nav2Bridge:
                 runtime.ground_truth = None
                 runtime.navigation_attempt = 0
                 runtime.scheduled_fault = None
-        self._start_sim()
+        startup_attempts = 1
+        try:
+            self._start_sim()
+        except RuntimeError:
+            # A failed ROS launch cannot be reused safely. One full retry is
+            # bounded, visible to the caller, and avoids leaving a half-live
+            # shared world behind after an intermittent discovery race.
+            self._stop_sim()
+            self._refresh_action_clients()
+            with self.data_lock:
+                for runtime in self.robots.values():
+                    runtime.pose = None
+                    runtime.ground_truth = None
+                    runtime.scan_raw_times.clear()
+                    runtime.scan_forwarded_times.clear()
+            startup_attempts = 2
+            self._start_sim()
         self.scenario = None
         for rid in self.robot_ids:
             self.robots[rid].controller_defaults = self.controller_config(rid)
@@ -670,6 +766,7 @@ class Nav2Bridge:
             "reset": "fleet",
             "requested_by": robot,
             "robots": list(self.robot_ids),
+            "startup_attempts": startup_attempts,
             "note": "共享Gazebo世界和两套Nav2已恢复到各自初始位置",
         }
 
@@ -791,18 +888,48 @@ class Nav2Bridge:
             "message": message,
         }
 
+    def _clear_nav2_costmaps(self, robot):
+        rt = self._rt(robot)
+        cleared = {}
+        for name, client in {
+            "local": rt.local_costmap_clear_client,
+            "global": rt.global_costmap_clear_client,
+        }.items():
+            if not client.wait_for_service(timeout_sec=2):
+                raise RuntimeError(f"{name} costmap 清理服务不可用")
+            request = self.ClearEntireCostmap.Request()
+            response = self._wait(client.call_async(request), 3)
+            if not response.success:
+                raise RuntimeError(f"{name} costmap 清理失败")
+            cleared[name] = True
+        return cleared
+
     def repair(self, robot, cause):
         rt = self._rt(robot)
         if cause == "scan_interrupted":
             with self.data_lock:
                 rt.scan_forwarding = True
-            deadline = time.monotonic() + 3
+            # One forwarded packet only proves that the switch flipped.  Wait
+            # for a sustained stream, then clear obstacle layers built while
+            # the sensor was stale before replaying the original goal.
+            deadline = time.monotonic() + 5
+            health = self.topic_health(robot)
             while time.monotonic() < deadline:
                 health = self.topic_health(robot)
-                if health["nav2_scan_hz"] > 0:
-                    return {"operation": "restore_scan_forwarding", **health}
+                if health["nav2_scan_hz"] >= max(
+                    1.0, min(3.0, health["raw_scan_hz"] * 0.6)
+                ):
+                    break
                 time.sleep(0.1)
-            return {"operation": "restore_scan_forwarding", **self.topic_health(robot)}
+            if health["nav2_scan_hz"] < 1.0:
+                raise RuntimeError("激光转发未恢复为稳定数据流")
+            cleared = self._clear_nav2_costmaps(robot)
+            time.sleep(0.5)
+            return {
+                "operation": "restore_scan_forwarding",
+                **self.topic_health(robot),
+                "stale_costmaps_cleared": cleared,
+            }
         if cause == "navigator_inactive":
             state = self.navigator_state(robot)
             if state["label"] == "inactive":
@@ -827,12 +954,19 @@ class Nav2Bridge:
                 robot, truth["x"], truth["y"], truth.get("theta", 0.0), variance=0.04
             )
             self._wait_localization_near(robot, truth["x"], truth["y"])
+            # The AMCL callback can update before map->odom reaches every Nav2
+            # consumer. Give TF one bounded propagation window, clear costmaps
+            # in the new frame, then re-check against fresh Gazebo truth.
+            time.sleep(1.0)
+            cleared = self._clear_nav2_costmaps(robot)
+            time.sleep(0.5)
             health = self.localization_health(robot)
             if health["status"] != "aligned":
                 raise RuntimeError("AMCL 重定位后仍未与 Gazebo 真值对齐")
             return {
                 "operation": "reseed_amcl_from_gazebo_truth",
                 "localization": health,
+                "stale_costmaps_cleared": cleared,
             }
         raise ValueError("No allowed repair for this diagnosis")
 

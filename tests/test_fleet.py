@@ -175,6 +175,73 @@ class CoordinateFleetModel(FleetModel):
         }, {"prompt_tokens": 20, "completion_tokens": 5}
 
 
+class CurrentPoseQueryModel(FleetModel):
+    def complete(self, messages, tools):
+        self.round += 1
+        if self.round == 1:
+            return {
+                "role": "assistant",
+                "tool_calls": [
+                    self.call("get_fleet_state", {}, "fleet"),
+                    self.call(
+                        "resolve_destinations",
+                        {"names": ["实体障碍箱", "原地"]}, "scene",
+                    ),
+                ],
+            }, {"prompt_tokens": 20, "completion_tokens": 5}
+        assignments = [
+            {
+                "robot_id": "robot_1",
+                "steps": [{
+                    "action": "navigate", "destination_id": "temporary_crate",
+                    "x": None, "y": None, "duration_seconds": None,
+                    "description": "前往实体障碍箱旁边",
+                }],
+                "rationale": "执行已登记对象导航",
+            },
+            {
+                "robot_id": "robot_2",
+                "steps": [
+                    {
+                        "action": "wait", "destination_id": None,
+                        "x": None, "y": None, "duration_seconds": 2.0,
+                        "description": "原地等待",
+                    },
+                    {
+                        "action": "enter_idle", "destination_id": None,
+                        "x": None, "y": None, "duration_seconds": None,
+                        "description": "进入空闲状态",
+                    },
+                ],
+                "rationale": "原地不是场景导航目标",
+            },
+        ]
+        return {
+            "role": "assistant",
+            "tool_calls": [self.call("finish_fleet_plan", {
+                "assignments": assignments,
+                "message": "使用实时位姿执行原地等待。",
+            })],
+        }, {"prompt_tokens": 20, "completion_tokens": 5}
+
+
+class UnknownPlaceModel(CurrentPoseQueryModel):
+    def complete(self, messages, tools):
+        if self.round == 0:
+            self.round += 1
+            return {
+                "role": "assistant",
+                "tool_calls": [
+                    self.call("get_fleet_state", {}, "fleet"),
+                    self.call(
+                        "resolve_destinations",
+                        {"names": ["月球仓库"]}, "scene",
+                    ),
+                ],
+            }, {"prompt_tokens": 20, "completion_tokens": 5}
+        return super().complete(messages, tools)
+
+
 def make_supervisor(tmp_path, model=None):
     store = Store(tmp_path / "fleet.sqlite")
     bridge = FleetBridge()
@@ -204,6 +271,27 @@ def test_fleet_agent_accepts_explicit_coordinates_after_live_state_query(tmp_pat
     assert [item["name"] for item in plan["tool_trace"]] == ["get_fleet_state"]
     assert [item["steps"][0]["x"] for item in plan["assignments"]] == [2.0, 2.0]
     assert plan["assignments"][1]["steps"][0]["y"] == -0.5
+
+
+def test_fleet_agent_treats_current_pose_as_wait_context_not_unknown_place(tmp_path):
+    _, _, supervisor = make_supervisor(tmp_path, CurrentPoseQueryModel())
+
+    plan = supervisor.plan("Robot 01去实体障碍箱旁边；Robot 02原地等待2秒后空闲")
+
+    assert plan["status"] == "ready"
+    assert plan["assignments"][1]["steps"][0]["action"] == "wait"
+    result = plan["tool_trace"][1]["result"]
+    assert result["results"][1] == {
+        "resolved": False, "query": "原地", "reason": "unknown_object"
+    }
+    assert "destination_id=null" in result["instruction"]
+
+
+def test_fleet_agent_still_rejects_genuinely_unknown_scene_object(tmp_path):
+    _, _, supervisor = make_supervisor(tmp_path, UnknownPlaceModel())
+
+    with pytest.raises(ValueError, match="未登记地点"):
+        supervisor.plan("Robot 01去月球仓库；Robot 02原地等待")
 
 
 def test_fleet_agent_cannot_invent_coordinates_not_present_in_request(tmp_path):

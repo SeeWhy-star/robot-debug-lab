@@ -139,6 +139,74 @@ def test_ai_investigates_repairs_and_replays_nav2_incident(tmp_path):
     assert "read_parameters" in titles
 
 
+def test_mission_recovers_one_secondary_mechanism_with_fresh_evidence(tmp_path):
+    class SequentialIncidentBridge(Nav2IncidentBridge):
+        def __init__(self):
+            super().__init__()
+            self.navigation_count = 0
+            self.drifted = False
+
+        def navigate(self, robot, x, y, cancel=None):
+            self.navigation_count += 1
+            self.moves.append((robot, x, y))
+            if self.navigation_count == 1:
+                return {"success": False, "error": 4.0, "message": "timeout"}
+            if self.navigation_count == 2:
+                self.drifted = True
+                return {"success": False, "error": 1.2, "message": "4"}
+            return {"success": True, "error": 0.1, "message": "4"}
+
+        def snapshot(self, robot):
+            value = super().snapshot(robot)
+            value["localization_health"] = {
+                "status": "drifted" if self.drifted else "aligned",
+                "position_error": 1.2 if self.drifted else 0.1,
+                "threshold": 0.45,
+            }
+            return value
+
+        def parameters(self, robot):
+            return {
+                **super().parameters(robot),
+                "controller": {"vx_max": 0.5, "vx_min": -0.35},
+                "nav2_lifecycle": {"bt_navigator": {"label": "active"}},
+            }
+
+        def repair(self, robot, cause):
+            self.repairs.append((robot, cause))
+            if cause == "scan_interrupted":
+                self.interrupted = False
+                return {"operation": "restore_scan_forwarding"}
+            assert cause == "localization_drift"
+            self.drifted = False
+            return {"operation": "reseed_amcl_from_gazebo_truth"}
+
+    bridge = SequentialIncidentBridge()
+    flow = Workflow(bridge, Store(tmp_path / "sequential.db"))
+    run = flow.submit_mission(
+        mission_plan([{
+            "id": "S1", "action": "navigate", "destination_id": "shelf_a",
+            "x": 2.0, "y": 0.5, "duration_seconds": None,
+            "description": "前往货架 A", "auto_repair": True, "status": "pending",
+        }]),
+        mode="rules",
+    )["id"]
+    flow.pool.shutdown(wait=True)
+
+    result = flow.store.get(run)
+    assert result["status"] == "verified"
+    assert bridge.repairs == [
+        ("robot_1", "scan_interrupted"),
+        ("robot_1", "localization_drift"),
+    ]
+    assert [item["cause"] for item in result["steps"][0]["repair_chain"]] == [
+        "scan_interrupted", "localization_drift"
+    ]
+    assert result["steps"][0]["secondary_repair_validation"]["success"] is True
+    kinds = [event["kind"] for event in result["events"]]
+    assert "failure_transition" in kinds
+
+
 def test_one_invalid_gateway_response_is_retried_without_rules_fallback(tmp_path):
     class FlakyModel(InvestigatingModel):
         def __init__(self):

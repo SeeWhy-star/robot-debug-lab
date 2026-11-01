@@ -1,0 +1,456 @@
+{
+  "generated_at": "2026-11-01T17:51:03.453062+00:00",
+  "simulation": "gazebo_nav2_two_robot",
+  "scenarios": [
+    "parallel",
+    "traffic",
+    "fault_recovery",
+    "handoff"
+  ],
+  "modes": [
+    "ai",
+    "rules"
+  ],
+  "complete": true,
+  "unique_plan_count": 4,
+  "planning_usage_by_plan": {
+    "5b6bd5b90010": {
+      "prompt_tokens": 17801,
+      "completion_tokens": 851
+    },
+    "4319e006a381": {
+      "prompt_tokens": 10075,
+      "completion_tokens": 958
+    },
+    "1dc5392180ab": {
+      "prompt_tokens": 17980,
+      "completion_tokens": 747
+    },
+    "c48573cb62a6": {
+      "prompt_tokens": 10237,
+      "completion_tokens": 647
+    }
+  },
+  "summary": [
+    {
+      "scenario": "fault_recovery",
+      "recovery_mode": "ai",
+      "trials": 1,
+      "success_rate": 1.0,
+      "fault_identification_rate": 1.0,
+      "wrong_repairs": 0,
+      "average_wall_seconds": 59.564,
+      "average_traffic_wait_seconds": 0.0,
+      "average_diagnostic_tool_calls": 4.0,
+      "average_diagnosis_tokens": 13353.0
+    },
+    {
+      "scenario": "fault_recovery",
+      "recovery_mode": "rules",
+      "trials": 1,
+      "success_rate": 1.0,
+      "fault_identification_rate": 1.0,
+      "wrong_repairs": 0,
+      "average_wall_seconds": 52.424,
+      "average_traffic_wait_seconds": 0.0,
+      "average_diagnostic_tool_calls": 2.0,
+      "average_diagnosis_tokens": 0.0
+    },
+    {
+      "scenario": "handoff",
+      "recovery_mode": "ai",
+      "trials": 1,
+      "success_rate": 1.0,
+      "fault_identification_rate": 1.0,
+      "wrong_repairs": 0,
+      "average_wall_seconds": 39.29,
+      "average_traffic_wait_seconds": 0.0,
+      "average_diagnostic_tool_calls": 4.0,
+      "average_diagnosis_tokens": 13530.0
+    },
+    {
+      "scenario": "handoff",
+      "recovery_mode": "rules",
+      "trials": 1,
+      "success_rate": 1.0,
+      "fault_identification_rate": 1.0,
+      "wrong_repairs": 0,
+      "average_wall_seconds": 32.289,
+      "average_traffic_wait_seconds": 0.0,
+      "average_diagnostic_tool_calls": 2.0,
+      "average_diagnosis_tokens": 0.0
+    },
+    {
+      "scenario": "parallel",
+      "recovery_mode": "ai",
+      "trials": 1,
+      "success_rate": 1.0,
+      "fault_identification_rate": null,
+      "wrong_repairs": 0,
+      "average_wall_seconds": 34.1,
+      "average_traffic_wait_seconds": 10.429,
+      "average_diagnostic_tool_calls": 0.0,
+      "average_diagnosis_tokens": 0.0
+    },
+    {
+      "scenario": "parallel",
+      "recovery_mode": "rules",
+      "trials": 1,
+      "success_rate": 1.0,
+      "fault_identification_rate": null,
+      "wrong_repairs": 0,
+      "average_wall_seconds": 31.863,
+      "average_traffic_wait_seconds": 21.277,
+      "average_diagnostic_tool_calls": 0.0,
+      "average_diagnosis_tokens": 0.0
+    },
+    {
+      "scenario": "traffic",
+      "recovery_mode": "ai",
+      "trials": 1,
+      "success_rate": 1.0,
+      "fault_identification_rate": null,
+      "wrong_repairs": 0,
+      "average_wall_seconds": 22.624,
+      "average_traffic_wait_seconds": 11.74,
+      "average_diagnostic_tool_calls": 0.0,
+      "average_diagnosis_tokens": 0.0
+    },
+    {
+      "scenario": "traffic",
+      "recovery_mode": "rules",
+      "trials": 1,
+      "success_rate": 1.0,
+      "fault_identification_rate": null,
+      "wrong_repairs": 0,
+      "average_wall_seconds": 22.667,
+      "average_traffic_wait_seconds": 11.743,
+      "average_diagnostic_tool_calls": 0.0,
+      "average_diagnosis_tokens": 0.0
+    }
+  ],
+  "rows": [
+    {
+      "scenario": "parallel",
+      "recovery_mode": "ai",
+      "plan_id": "5b6bd5b90010",
+      "run_ids": [
+        "a62213f5d4d1",
+        "f858c874e455"
+      ],
+      "handoff_run_id": null,
+      "statuses": {
+        "robot_1": "verified",
+        "robot_2": "verified"
+      },
+      "scenario_passed": true,
+      "fault": null,
+      "fault_identified": null,
+      "original_batch_restored": true,
+      "handoff_verified": false,
+      "unaffected_peer_completed": null,
+      "independent_gazebo_acceptance": true,
+      "wrong_repairs": 0,
+      "repair_operations": [],
+      "planner_tool_calls": 2,
+      "diagnostic_tool_calls": 0,
+      "traffic_reservations": 2,
+      "traffic_conflict_waits": 1,
+      "traffic_total_wait_seconds": 10.429,
+      "traffic_max_wait_seconds": 10.429,
+      "traffic_global_fallbacks": 0,
+      "planning_prompt_tokens": 17801,
+      "planning_completion_tokens": 851,
+      "diagnosis_tokens": 0,
+      "ai_fault_investigation_used": true,
+      "wall_seconds": 34.1,
+      "trial": 1,
+      "plan_reused": true,
+      "scheduled_navigation_attempt": null
+    },
+    {
+      "scenario": "parallel",
+      "recovery_mode": "rules",
+      "plan_id": "5b6bd5b90010",
+      "run_ids": [
+        "6bfbff84eb8f",
+        "c225572436ea"
+      ],
+      "handoff_run_id": null,
+      "statuses": {
+        "robot_1": "verified",
+        "robot_2": "verified"
+      },
+      "scenario_passed": true,
+      "fault": null,
+      "fault_identified": null,
+      "original_batch_restored": true,
+      "handoff_verified": false,
+      "unaffected_peer_completed": null,
+      "independent_gazebo_acceptance": true,
+      "wrong_repairs": 0,
+      "repair_operations": [],
+      "planner_tool_calls": 2,
+      "diagnostic_tool_calls": 0,
+      "traffic_reservations": 2,
+      "traffic_conflict_waits": 1,
+      "traffic_total_wait_seconds": 21.277,
+      "traffic_max_wait_seconds": 21.277,
+      "traffic_global_fallbacks": 0,
+      "planning_prompt_tokens": 17801,
+      "planning_completion_tokens": 851,
+      "diagnosis_tokens": 0,
+      "ai_fault_investigation_used": true,
+      "wall_seconds": 31.863,
+      "trial": 1,
+      "plan_reused": true,
+      "scheduled_navigation_attempt": null
+    },
+    {
+      "scenario": "traffic",
+      "recovery_mode": "ai",
+      "plan_id": "4319e006a381",
+      "run_ids": [
+        "c5ddba91b041",
+        "1b991f258c16"
+      ],
+      "handoff_run_id": null,
+      "statuses": {
+        "robot_1": "verified",
+        "robot_2": "verified"
+      },
+      "scenario_passed": true,
+      "fault": null,
+      "fault_identified": null,
+      "original_batch_restored": true,
+      "handoff_verified": false,
+      "unaffected_peer_completed": null,
+      "independent_gazebo_acceptance": true,
+      "wrong_repairs": 0,
+      "repair_operations": [],
+      "planner_tool_calls": 1,
+      "diagnostic_tool_calls": 0,
+      "traffic_reservations": 2,
+      "traffic_conflict_waits": 1,
+      "traffic_total_wait_seconds": 11.74,
+      "traffic_max_wait_seconds": 11.74,
+      "traffic_global_fallbacks": 0,
+      "planning_prompt_tokens": 10075,
+      "planning_completion_tokens": 958,
+      "diagnosis_tokens": 0,
+      "ai_fault_investigation_used": true,
+      "wall_seconds": 22.624,
+      "trial": 1,
+      "plan_reused": true,
+      "scheduled_navigation_attempt": null
+    },
+    {
+      "scenario": "traffic",
+      "recovery_mode": "rules",
+      "plan_id": "4319e006a381",
+      "run_ids": [
+        "b7854e2861ba",
+        "d9ea4ca7c474"
+      ],
+      "handoff_run_id": null,
+      "statuses": {
+        "robot_1": "verified",
+        "robot_2": "verified"
+      },
+      "scenario_passed": true,
+      "fault": null,
+      "fault_identified": null,
+      "original_batch_restored": true,
+      "handoff_verified": false,
+      "unaffected_peer_completed": null,
+      "independent_gazebo_acceptance": true,
+      "wrong_repairs": 0,
+      "repair_operations": [],
+      "planner_tool_calls": 1,
+      "diagnostic_tool_calls": 0,
+      "traffic_reservations": 2,
+      "traffic_conflict_waits": 1,
+      "traffic_total_wait_seconds": 11.743,
+      "traffic_max_wait_seconds": 11.743,
+      "traffic_global_fallbacks": 0,
+      "planning_prompt_tokens": 10075,
+      "planning_completion_tokens": 958,
+      "diagnosis_tokens": 0,
+      "ai_fault_investigation_used": true,
+      "wall_seconds": 22.667,
+      "trial": 1,
+      "plan_reused": true,
+      "scheduled_navigation_attempt": null
+    },
+    {
+      "scenario": "handoff",
+      "recovery_mode": "ai",
+      "plan_id": "1dc5392180ab",
+      "run_ids": [
+        "4f7644aae0a9",
+        "b475c2fff0c3"
+      ],
+      "handoff_run_id": "b2da743f2ecd",
+      "statuses": {
+        "robot_1": "unresolved",
+        "robot_2": "verified"
+      },
+      "scenario_passed": true,
+      "fault": "scan_interrupted",
+      "fault_identified": true,
+      "original_batch_restored": false,
+      "handoff_verified": true,
+      "unaffected_peer_completed": true,
+      "independent_gazebo_acceptance": true,
+      "wrong_repairs": 0,
+      "repair_operations": [],
+      "repair_causes": [],
+      "planner_tool_calls": 2,
+      "diagnostic_tool_calls": 4,
+      "traffic_reservations": 2,
+      "traffic_conflict_waits": 0,
+      "traffic_total_wait_seconds": 0,
+      "traffic_max_wait_seconds": 0.0,
+      "traffic_global_fallbacks": 0,
+      "planning_prompt_tokens": 17980,
+      "planning_completion_tokens": 747,
+      "diagnosis_tokens": 13530,
+      "ai_fault_investigation_used": true,
+      "wall_seconds": 39.29,
+      "trial": 1,
+      "plan_reused": true,
+      "planning_attempts": 2,
+      "scheduled_navigation_attempt": 1
+    },
+    {
+      "scenario": "handoff",
+      "recovery_mode": "rules",
+      "plan_id": "1dc5392180ab",
+      "run_ids": [
+        "77aa5f3c2432",
+        "55ae4b3e1a26"
+      ],
+      "handoff_run_id": "c73fb76067df",
+      "statuses": {
+        "robot_1": "unresolved",
+        "robot_2": "verified"
+      },
+      "scenario_passed": true,
+      "fault": "scan_interrupted",
+      "fault_identified": true,
+      "original_batch_restored": false,
+      "handoff_verified": true,
+      "unaffected_peer_completed": true,
+      "independent_gazebo_acceptance": true,
+      "wrong_repairs": 0,
+      "repair_operations": [],
+      "repair_causes": [],
+      "planner_tool_calls": 2,
+      "diagnostic_tool_calls": 2,
+      "traffic_reservations": 2,
+      "traffic_conflict_waits": 0,
+      "traffic_total_wait_seconds": 0,
+      "traffic_max_wait_seconds": 0.0,
+      "traffic_global_fallbacks": 0,
+      "planning_prompt_tokens": 17980,
+      "planning_completion_tokens": 747,
+      "diagnosis_tokens": 0,
+      "ai_fault_investigation_used": true,
+      "wall_seconds": 32.289,
+      "trial": 1,
+      "plan_reused": true,
+      "planning_attempts": 2,
+      "scheduled_navigation_attempt": 1
+    },
+    {
+      "scenario": "fault_recovery",
+      "recovery_mode": "ai",
+      "plan_id": "c48573cb62a6",
+      "run_ids": [
+        "2275bdf548b5",
+        "efe14dc06b21"
+      ],
+      "handoff_run_id": null,
+      "statuses": {
+        "robot_1": "verified",
+        "robot_2": "verified"
+      },
+      "scenario_passed": true,
+      "fault": "scan_interrupted",
+      "fault_identified": true,
+      "original_batch_restored": true,
+      "handoff_verified": false,
+      "unaffected_peer_completed": true,
+      "independent_gazebo_acceptance": true,
+      "wrong_repairs": 0,
+      "repair_operations": [
+        "restore_scan_forwarding"
+      ],
+      "repair_causes": [
+        "scan_interrupted"
+      ],
+      "planner_tool_calls": 2,
+      "diagnostic_tool_calls": 4,
+      "traffic_reservations": 2,
+      "traffic_conflict_waits": 0,
+      "traffic_total_wait_seconds": 0,
+      "traffic_max_wait_seconds": 0.0,
+      "traffic_global_fallbacks": 0,
+      "planning_prompt_tokens": 10237,
+      "planning_completion_tokens": 647,
+      "diagnosis_tokens": 13353,
+      "ai_fault_investigation_used": true,
+      "wall_seconds": 59.564,
+      "trial": 1,
+      "plan_reused": true,
+      "planning_attempts": 1,
+      "scheduled_navigation_attempt": 1
+    },
+    {
+      "scenario": "fault_recovery",
+      "recovery_mode": "rules",
+      "plan_id": "c48573cb62a6",
+      "run_ids": [
+        "8cfbd28db646",
+        "cc670121ff04"
+      ],
+      "handoff_run_id": null,
+      "statuses": {
+        "robot_1": "verified",
+        "robot_2": "verified"
+      },
+      "scenario_passed": true,
+      "fault": "scan_interrupted",
+      "fault_identified": true,
+      "original_batch_restored": true,
+      "handoff_verified": false,
+      "unaffected_peer_completed": true,
+      "independent_gazebo_acceptance": true,
+      "wrong_repairs": 0,
+      "repair_operations": [
+        "restore_scan_forwarding"
+      ],
+      "repair_causes": [
+        "scan_interrupted"
+      ],
+      "planner_tool_calls": 2,
+      "diagnostic_tool_calls": 2,
+      "traffic_reservations": 2,
+      "traffic_conflict_waits": 0,
+      "traffic_total_wait_seconds": 0,
+      "traffic_max_wait_seconds": 0.0,
+      "traffic_global_fallbacks": 0,
+      "planning_prompt_tokens": 10237,
+      "planning_completion_tokens": 647,
+      "diagnosis_tokens": 0,
+      "ai_fault_investigation_used": true,
+      "wall_seconds": 52.424,
+      "trial": 1,
+      "plan_reused": true,
+      "planning_attempts": 1,
+      "scheduled_navigation_attempt": 1
+    }
+  ],
+  "all_cases_passed": true,
+  "ai_fault_runs_used_model_tools": true
+}
