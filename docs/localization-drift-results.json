@@ -1,0 +1,41 @@
+{
+  "generated_at": 1793513642.47502,
+  "simulation": "gazebo_nav2",
+  "rows": [
+    {
+      "fault": "localization_drift",
+      "mode": "ai",
+      "identified_correctly": true,
+      "original_task_restored": true,
+      "wrong_repairs": 0,
+      "repair_operations": [
+        "reseed_amcl_from_gazebo_truth"
+      ],
+      "tool_calls": 3,
+      "investigation_and_recovery_seconds": 22.869,
+      "prompt_tokens": 11760,
+      "completion_tokens": 664,
+      "status": "verified",
+      "run_id": "2eb72ba43c93"
+    },
+    {
+      "fault": "localization_drift",
+      "mode": "rules",
+      "identified_correctly": true,
+      "original_task_restored": true,
+      "wrong_repairs": 0,
+      "repair_operations": [
+        "reseed_amcl_from_gazebo_truth"
+      ],
+      "tool_calls": 2,
+      "investigation_and_recovery_seconds": 15.682,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "status": "verified",
+      "run_id": "3bed4b9610a9"
+    }
+  ],
+  "all_identified": true,
+  "all_restored": true,
+  "ai_has_no_rules_fallback": true
+}

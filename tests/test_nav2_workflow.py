@@ -348,7 +348,7 @@ class MultiMechanismBridge(Nav2IncidentBridge):
         }
 
     def snapshot(self, robot):
-        return {
+        data = {
             "robot_id": robot,
             "topics": {"raw_scan_hz": 10.0, "nav2_scan_hz": 10.0},
             "nav2_lifecycle": {
@@ -357,6 +357,12 @@ class MultiMechanismBridge(Nav2IncidentBridge):
                 }
             },
         }
+        data["localization_health"] = {
+            "status": "drifted" if self.cause == "localization_drift" else "aligned",
+            "position_error": 1.0 if self.cause == "localization_drift" else 0.1,
+            "threshold": 0.45,
+        }
+        return data
 
     def parameters(self, robot):
         data = self.snapshot(robot)
@@ -373,6 +379,7 @@ class MultiMechanismBridge(Nav2IncidentBridge):
         return {"operation": {
             "navigator_inactive": "resume_nav2_lifecycle",
             "controller_velocity_zero": "restore_controller_velocity_limits",
+            "localization_drift": "reseed_amcl_from_gazebo_truth",
         }[cause]}
 
 
@@ -403,7 +410,10 @@ class MechanismModel:
         ), {}
 
 
-@pytest.mark.parametrize("cause", ["navigator_inactive", "controller_velocity_zero"])
+@pytest.mark.parametrize(
+    "cause",
+    ["navigator_inactive", "controller_velocity_zero", "localization_drift"],
+)
 def test_distinct_nav2_faults_require_matching_evidence_and_repair(tmp_path, cause):
     bridge = MultiMechanismBridge(cause)
     store = Store(tmp_path / f"{cause}.db")

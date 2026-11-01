@@ -1,0 +1,94 @@
+{
+  "generated_at": 1793513841.1977363,
+  "simulation": "gazebo_nav2",
+  "prompt": "先去实体障碍箱旁边，然后回起点，最后去充电站等待。",
+  "unique_plan_count": 1,
+  "planning_usage_by_plan": {
+    "04cc1387c43f": {
+      "prompt_tokens": 10846,
+      "completion_tokens": 885
+    }
+  },
+  "summary": [
+    {
+      "recovery_mode": "ai",
+      "fault": "localization_drift",
+      "trials": 1,
+      "identified_rate": 1.0,
+      "mission_restore_rate": 1.0,
+      "wrong_repairs": 0,
+      "average_tool_calls": 4.0,
+      "average_recovery_seconds": 56.944,
+      "average_diagnosis_tokens": 22107.0
+    },
+    {
+      "recovery_mode": "rules",
+      "fault": "localization_drift",
+      "trials": 1,
+      "identified_rate": 1.0,
+      "mission_restore_rate": 1.0,
+      "wrong_repairs": 0,
+      "average_tool_calls": 2.0,
+      "average_recovery_seconds": 15.805,
+      "average_diagnosis_tokens": 0.0
+    }
+  ],
+  "rows": [
+    {
+      "fault": "localization_drift",
+      "recovery_mode": "ai",
+      "identified_correctly": true,
+      "original_mission_restored": true,
+      "completed_steps_preserved": [
+        "S1"
+      ],
+      "recovered_step_id": "S2",
+      "wrong_repairs": 0,
+      "repair_operations": [
+        "reseed_amcl_from_gazebo_truth"
+      ],
+      "diagnostic_tool_calls": 4,
+      "investigation_and_recovery_seconds": 56.944,
+      "planning_prompt_tokens": 10846,
+      "planning_completion_tokens": 885,
+      "diagnosis_prompt_tokens": 21224,
+      "diagnosis_completion_tokens": 883,
+      "status": "verified",
+      "trial": 1,
+      "run_id": "bb8d8bbfa6b3",
+      "plan_id": "04cc1387c43f",
+      "plan_reused": true,
+      "scheduled_navigation_attempt": 2
+    },
+    {
+      "fault": "localization_drift",
+      "recovery_mode": "rules",
+      "identified_correctly": true,
+      "original_mission_restored": true,
+      "completed_steps_preserved": [
+        "S1"
+      ],
+      "recovered_step_id": "S2",
+      "wrong_repairs": 0,
+      "repair_operations": [
+        "reseed_amcl_from_gazebo_truth"
+      ],
+      "diagnostic_tool_calls": 2,
+      "investigation_and_recovery_seconds": 15.805,
+      "planning_prompt_tokens": 10846,
+      "planning_completion_tokens": 885,
+      "diagnosis_prompt_tokens": 0,
+      "diagnosis_completion_tokens": 0,
+      "status": "verified",
+      "trial": 1,
+      "run_id": "094a02427add",
+      "plan_id": "04cc1387c43f",
+      "plan_reused": true,
+      "scheduled_navigation_attempt": 2
+    }
+  ],
+  "all_identified": true,
+  "all_missions_restored": true,
+  "all_preserved_prior_steps": true,
+  "ai_has_no_rules_fallback": true
+}

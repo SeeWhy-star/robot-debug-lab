@@ -7,6 +7,7 @@ EXPECTED_REPAIRS = {
     "scan_interrupted": "restore_scan_forwarding",
     "navigator_inactive": "resume_nav2_lifecycle",
     "controller_velocity_zero": "restore_controller_velocity_limits",
+    "localization_drift": "reseed_amcl_from_gazebo_truth",
 }
 DIAGNOSTIC_TOOLS = {
     "inspect_graph", "read_parameters", "sample_motion", "measure_topics"

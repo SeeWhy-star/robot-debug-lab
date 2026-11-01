@@ -8,7 +8,7 @@
 2. 网关让 AMCL 保持读取原始 `/scan`，把障碍物层和碰撞监控改到 `/scan_faulted`，并受控转发 Gazebo 的雷达数据。
 3. 导航目标失败后，Agent 只能读取节点图、雷达速率、lifecycle 状态、参数和运动采样。
 4. 模型必须通过 `finish_diagnosis` 返回固定结构，并引用本次任务真实存在的事件编号。
-5. 网关重新读取现场；只有新鲜证据仍支持同一原因时，才执行匹配的白名单恢复：恢复雷达转发、恢复 lifecycle manager，或恢复 controller 速度参数。
+5. 网关重新读取现场；只有新鲜证据仍支持同一原因时，才执行匹配的白名单恢复：恢复雷达转发、恢复 lifecycle manager、恢复 controller 速度参数，或在仿真中用 Gazebo 真值重新播种 AMCL。
 6. 系统重放完全相同的 Nav2 目标，用 Gazebo `/odom` 转换到地图坐标后独立验收。
 
 网页“运行现场”是 Nav2 实际占据栅格上的 2D 遥测视图。Gazebo 原生窗口负责 3D 渲染，RViz 负责展示地图、代价地图、激光和路径。三者共享同一套世界坐标，网页不另外发明货架位置。
@@ -37,7 +37,11 @@ AI 还负责开放式故障调查：决定先看节点、参数、雷达速率�
 
 一个导航步骤可能先因系统故障失败，修复后又因实体阻塞失败。执行器为每次尝试标记 `initial / post_repair_replay / replanned`，不会把第二次失败归到第一次故障。白名单修复后的重放仍失败时，程序必须重新读取话题、lifecycle 和 controller 状态；只有确定性复检为 `healthy` 才写入 `failure_transition` 并开放任务级重规划。路线 Agent 可以引用这条已存在的复检证据，但仍必须重新调用 `get_mission_state` 和 `list_approach_options`，并引用两者的新证据。若系统仍不健康，路线恢复被禁止。
 
-这条链路已经用 `navigator_inactive + temporary_crate` 做过真实 Gazebo/Nav2 验收：系统修复后 west 接近点重放失败，Nav2 证明 southwest 可达，计划版本增加后完成同一步及后续等待。组合验收刻意不放宽 Gazebo 位置阈值；另一次长路线返回起点时出现 Nav2 报成功但 Gazebo 误差 0.57 m，任务保持 unresolved，作为后续定位漂移故障边界。
+这条链路已经用 `navigator_inactive + temporary_crate` 做过真实 Gazebo/Nav2 验收：系统修复后 west 接近点重放失败，Nav2 证明 southwest 可达，计划版本增加后完成同一步及后续等待。组合验收刻意不放宽 Gazebo 位置阈值。
+
+## 定位漂移
+
+第四种故障通过真实 ROS `/initialpose` 接口给 AMCL 注入 1.5 m 有偏位姿，不修改 Gazebo 里程计。`inspect_graph` 同时返回 AMCL 估计、Gazebo 真值、实测位置误差和 0.45 m 诊断阈值；注入类型本身不进入 Agent 上下文。雷达、lifecycle 和 controller 均健康且位姿误差超过阈值时，原因才是 `localization_drift`。仿真白名单修复 `reseed_amcl_from_gazebo_truth` 重新播种 AMCL，并要求偏差回到阈值内；之后仍须重放原 Nav2 目标，并由 Gazebo `< 0.35 m` 标准独立验收。实体机器人不能直接照搬 Gazebo 真值修复，需要已认证的定位基准、标记物或人工确认。
 
 ## 运行状态
 
@@ -47,4 +51,4 @@ AI 还负责开放式故障调查：决定先看节点、参数、雷达速率�
 
 Agent 没有 shell、文件写入、故障注入和任意 ROS 参数工具。模型提出的原因不会直接触发动作；程序会用新鲜现场数据再次判断。网页只监听回环地址并使用会话令牌限制写操作。
 
-项目当前是一台仿真机器人、三种可控 Nav2/ROS 故障和单机 OpenFang 会话。实体机器人需要另行加入硬件急停、速度/区域约束、设备身份和人工审批。
+项目当前是一台仿真机器人、四种可控 Nav2/ROS 故障和单机 OpenFang 会话。实体机器人需要另行加入硬件急停、速度/区域约束、设备身份和人工审批。

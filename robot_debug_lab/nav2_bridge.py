@@ -44,6 +44,7 @@ WAREHOUSE_WORLD = ROOT / "simulation" / "worlds" / "rdl_warehouse.sdf.xacro"
 WAREHOUSE_MAP = ROOT / "simulation" / "maps" / "rdl_warehouse.yaml"
 START_X = -2.0
 START_Y = -0.5
+LOCALIZATION_DRIFT_THRESHOLD = 0.45
 
 
 def rewrite_nav2_params(text):
@@ -248,6 +249,61 @@ class Nav2Bridge:
                 "Nav2 已启动但定位未就绪，请查看 .runtime/nav2-simulation.log"
             )
 
+    def _publish_initial_pose(self, x, y, yaw=0.0, variance=0.0025, repeats=6):
+        """Publish one bounded AMCL seed through the real ROS interface."""
+        message = PoseWithCovarianceStamped()
+        message.header.frame_id = "map"
+        message.pose.pose.position.x = float(x)
+        message.pose.pose.position.y = float(y)
+        message.pose.pose.orientation.z = math.sin(float(yaw) / 2.0)
+        message.pose.pose.orientation.w = math.cos(float(yaw) / 2.0)
+        message.pose.covariance[0] = float(variance)
+        message.pose.covariance[7] = float(variance)
+        message.pose.covariance[35] = max(float(variance), 0.001)
+        for _ in range(repeats):
+            message.header.stamp = self.node.get_clock().now().to_msg()
+            self.initial_pose_pub.publish(message)
+            time.sleep(0.15)
+
+    def localization_health(self, robot="robot_1"):
+        self._require_robot(robot)
+        with self.data_lock:
+            truth = dict(self.ground_truth) if self.ground_truth else None
+            estimate = dict(self.pose) if self.pose else None
+        if not truth or not estimate:
+            return {
+                "status": "unavailable",
+                "position_error": None,
+                "gazebo_pose": truth,
+                "amcl_pose": estimate,
+                "observed": time.time(),
+            }
+        position_error = math.hypot(
+            truth["x"] - estimate["x"], truth["y"] - estimate["y"]
+        )
+        return {
+            "status": (
+                "drifted"
+                if position_error >= LOCALIZATION_DRIFT_THRESHOLD
+                else "aligned"
+            ),
+            "position_error": round(position_error, 4),
+            "threshold": LOCALIZATION_DRIFT_THRESHOLD,
+            "gazebo_pose": truth,
+            "amcl_pose": estimate,
+            "observed": time.time(),
+        }
+
+    def _wait_localization_near(self, x, y, timeout=6.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            with self.data_lock:
+                estimate = dict(self.pose) if self.pose else None
+            if estimate and math.hypot(estimate["x"] - x, estimate["y"] - y) < 0.3:
+                return estimate
+            time.sleep(0.1)
+        raise RuntimeError("AMCL 未接受经过审核的重定位位姿")
+
     def _scan(self, message):
         now = time.time()
         with self.data_lock:
@@ -412,6 +468,7 @@ class Nav2Bridge:
             "topics": self.topic_health(robot),
             "pose": dict(self.ground_truth or self.pose or {}),
             "localization_pose": dict(self.pose) if self.pose else None,
+            "localization_health": self.localization_health(robot),
             "nav2_lifecycle": {"bt_navigator": self.navigator_state(robot)},
             "observed": time.time(),
         }
@@ -459,6 +516,20 @@ class Nav2Bridge:
                 raise RuntimeError("无法读取 controller_server 参数")
             self.controller_defaults = current
             self._set_controller_config(0.0, 0.0)
+        elif fault == "localization_drift":
+            with self.data_lock:
+                truth = dict(self.ground_truth) if self.ground_truth else None
+            if not truth:
+                raise RuntimeError("Gazebo 真值尚未就绪，无法注入定位漂移")
+            injected = {
+                "x": truth["x"] + 1.5,
+                "y": truth["y"],
+                "theta": truth.get("theta", 0.0),
+            }
+            self._publish_initial_pose(
+                injected["x"], injected["y"], injected["theta"]
+            )
+            self._wait_localization_near(injected["x"], injected["y"])
         else:
             raise ValueError("不支持的 Nav2 故障类型")
         return {"applied": fault, "robot_id": robot}
@@ -472,7 +543,8 @@ class Nav2Bridge:
         """
         self._require_robot(robot)
         if fault not in {
-            "scan_interrupted", "navigator_inactive", "controller_velocity_zero"
+            "scan_interrupted", "navigator_inactive", "controller_velocity_zero",
+            "localization_drift",
         }:
             raise ValueError("不支持的 Nav2 故障类型")
         if not isinstance(navigation_attempt, int) or not 1 <= navigation_attempt <= 8:
@@ -664,6 +736,22 @@ class Nav2Bridge:
                 self.controller_defaults["vx_max"], self.controller_defaults["vx_min"]
             )
             return {"operation": "restore_controller_velocity_limits", "controller": config}
+        if cause == "localization_drift":
+            with self.data_lock:
+                truth = dict(self.ground_truth) if self.ground_truth else None
+            if not truth:
+                raise RuntimeError("Gazebo 真值不可用，拒绝重定位")
+            self._publish_initial_pose(
+                truth["x"], truth["y"], truth.get("theta", 0.0), variance=0.04
+            )
+            self._wait_localization_near(truth["x"], truth["y"])
+            health = self.localization_health(robot)
+            if health["status"] != "aligned":
+                raise RuntimeError("AMCL 重定位后仍未与 Gazebo 真值对齐")
+            return {
+                "operation": "reseed_amcl_from_gazebo_truth",
+                "localization": health,
+            }
         raise ValueError("No allowed repair for this diagnosis")
 
     def stop(self, robot):
@@ -687,6 +775,7 @@ class Nav2Bridge:
                 "controller_alive": self.sim is not None and self.sim.poll() is None,
                 "busy": self.locks["robot_1"].locked(),
                 "scan": self.topic_health(),
+                "localization": self.localization_health(),
                 "runtime": "nav2_gazebo",
                 "scenario_active": self.scenario is not None,
             }

@@ -11,6 +11,7 @@ type Robot = {
   busy: boolean;
   runtime?: string;
   scan?: { raw_scan_hz: number; nav2_scan_hz: number; scan_forwarding: boolean };
+  localization?: { status: string; position_error: number | null; threshold?: number };
 };
 type Event = {
   id: string;
@@ -104,6 +105,7 @@ const causes: Record<string, string> = {
   scan_interrupted: "导航雷达数据中断",
   navigator_inactive: "BT Navigator 生命周期停用",
   controller_velocity_zero: "Controller 速度配置为零",
+  localization_drift: "AMCL 定位漂移",
   healthy: "状态正常",
   unknown: "证据不足",
 };
@@ -461,7 +463,12 @@ function App() {
               <span>
                 <i className="dot mint" /> Robot 01
               </span>
-              <small>Gazebo 里程计轨迹 · 虚线圈仅表示当前执行目标，历史目标不显示</small>
+              <small>
+                Gazebo 里程计轨迹 · 虚线圈仅表示当前执行目标，历史目标不显示
+                {data?.robots[0]?.localization?.position_error != null
+                  ? ` · AMCL/Gazebo 偏差 ${data.robots[0].localization.position_error.toFixed(2)} m`
+                  : ""}
+              </small>
             </div>
             <div className="fault-box">
               <div>

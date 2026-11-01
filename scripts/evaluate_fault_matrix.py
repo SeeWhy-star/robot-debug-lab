@@ -13,7 +13,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from robot_debug_lab.evaluation import evaluate_run
 
 
-FAULTS = ("scan_interrupted", "navigator_inactive", "controller_velocity_zero")
+FAULTS = (
+    "scan_interrupted", "navigator_inactive", "controller_velocity_zero",
+    "localization_drift",
+)
 TERMINAL = {"verified", "unresolved", "failed", "canceled", "diagnosed", "interrupted"}
 
 

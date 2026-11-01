@@ -8,11 +8,15 @@ import time
 import httpx
 
 
-FAULTS = ("scan_interrupted", "navigator_inactive", "controller_velocity_zero")
+FAULTS = (
+    "scan_interrupted", "navigator_inactive", "controller_velocity_zero",
+    "localization_drift",
+)
 EXPECTED_REPAIRS = {
     "scan_interrupted": "restore_scan_forwarding",
     "navigator_inactive": "resume_nav2_lifecycle",
     "controller_velocity_zero": "restore_controller_velocity_limits",
+    "localization_drift": "reseed_amcl_from_gazebo_truth",
 }
 TERMINAL = {"verified", "unresolved", "failed", "canceled", "interrupted"}
 PROMPT = "先去充电站，然后去货架 A，最后在原地等待。"

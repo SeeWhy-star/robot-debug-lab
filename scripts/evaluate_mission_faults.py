@@ -13,7 +13,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from robot_debug_lab.evaluation import evaluate_mission_run, summarize_mission_rows
 
 
-FAULTS = ("scan_interrupted", "navigator_inactive", "controller_velocity_zero")
+FAULTS = (
+    "scan_interrupted", "navigator_inactive", "controller_velocity_zero",
+    "localization_drift",
+)
 TERMINAL = {"verified", "unresolved", "failed", "canceled", "interrupted"}
 PROMPT = "先去实体障碍箱旁边，然后回起点，最后去充电站等待。"
 

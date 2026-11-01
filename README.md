@@ -16,6 +16,7 @@ A TurtleBot3 executes a real Nav2 goal in a repository-owned Gazebo warehouse. T
 - Unsupported intents such as pickup return no executable steps and a grounded alternative; a follow-up is replanned with the full clarification history.
 - A diagnostic agent chooses read-only tools and produces a structured conclusion with real evidence IDs.
 - A deterministic gateway checks fresh evidence before applying the matching allowlisted repair.
+- Localization incidents are diagnosed from measured AMCL-versus-Gazebo divergence; the simulation-only repair may reseed AMCL from verified Gazebo truth before replaying the original goal.
 - When the stack is healthy but a reviewed semantic approach fails in execution, a separate Agent may select only a Nav2-verified alternative approach while completed and later mission steps remain unchanged.
 - Nav2 remains responsible for planning and control; the model never publishes velocity commands.
 
@@ -50,6 +51,8 @@ Run the live incident acceptance against a running server:
 .venv/bin/python scripts/acceptance_combined_recovery.py --fault navigator_inactive
 .venv/bin/python scripts/evaluate_fault_matrix.py --mode both
 .venv/bin/python scripts/evaluate_mission_faults.py --fault all --mode both --trials 3 --resume
+# Reproduce only the fourth localization mechanism
+.venv/bin/python scripts/evaluate_fault_matrix.py --fault localization_drift --mode both
 ```
 
 ## Architecture
@@ -76,11 +79,13 @@ Faults can also be armed for the Nth real navigation call of an ordered mission 
 
 The [combined recovery acceptance](docs/combined-recovery-results.json) exercises two failures on the same mission step. The diagnostic Agent first identifies and repairs an inactive Nav2 lifecycle. Replaying the identical Shelf A target then encounters the physical crate. Only after a fresh deterministic stack check reports healthy may the route Agent inspect mission and Nav2 path evidence, select the reviewed `southwest` approach, and continue the waiting and idle steps. The live run completed all five steps with 0.182 m Gazebo odometry error.
 
+A fourth mechanism now corrupts AMCL through the real `/initialpose` interface while Gazebo odometry remains the acceptance oracle. The [direct AI/rules comparison](docs/localization-drift-results.json) identified and recovered both runs with zero wrong repairs. The [mid-mission comparison](docs/localization-mission-results.json) reused one model plan, preserved S1, recovered S2, and completed all later steps in both modes.
+
 ## Development status
 
 **Phase 1 backend is complete:** zero-token atomic routing, tool-grounded ReAct planning, an authoritative semantic scene, ordered multi-step execution, contextual clarification, capability negotiation, observable simulated charging, cancellation, and independent acceptance are implemented. Evidence-grounded recovery from a blocked semantic approach is also working end to end.
 
-**Phase 2 has a repeatable closed loop:** three distinct ROS/Nav2 failures, AI-versus-rules comparison, and an automated evaluation matrix are present. A system fault can occur after a complex mission has started; completed steps are preserved, the failed step is repaired and replayed, and later steps continue. The three-trial, 18-run live matrix and the combined system-plus-route recovery both pass. The next work is treating long-route AMCL/Gazebo pose divergence as a separate localization fault and reducing investigation-token variance, alongside costmap-derived candidate generation, general conditional task graphs, restart resumption, multi-robot operation, and physical manipulation.
+**Phase 2 backend is complete:** four distinct ROS/Nav2 failures, AI-versus-rules comparison, mid-mission recovery, automated evaluation, and combined system-plus-route recovery are implemented. The original three-mechanism matrix passed 18 live runs; localization drift additionally passed direct and ordered-mission AI/rules comparisons. Work stops at the phase boundary for manual acceptance before adding the second robot and per-robot Agents in Phase 3. Costmap-derived candidate generation, general conditional task graphs, restart resumption, and physical manipulation remain later extensions.
 
 ## Real Nav2 source case
 

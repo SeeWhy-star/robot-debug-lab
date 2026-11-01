@@ -65,7 +65,10 @@ class Diagnose(BaseModel):
 
 
 class Fault(BaseModel):
-    kind: Literal["scan_interrupted", "navigator_inactive", "controller_velocity_zero"]
+    kind: Literal[
+        "scan_interrupted", "navigator_inactive", "controller_velocity_zero",
+        "localization_drift",
+    ]
 
 
 class FaultSchedule(Fault):

@@ -8,6 +8,7 @@ CAUSES = [
     "scan_interrupted",
     "navigator_inactive",
     "controller_velocity_zero",
+    "localization_drift",
     "healthy",
     "unknown",
 ]
@@ -37,7 +38,7 @@ TOOLS = [
     for n, d in [
         (
             "inspect_graph",
-            "Read the live Nav2 ROS node graph, sensor rates and robot pose.",
+            "Read the live Nav2 ROS node graph, sensor rates, Gazebo pose, AMCL pose, and their measured localization error.",
         ),
         (
             "read_parameters",
@@ -167,7 +168,7 @@ class RobotAgent:
                 evidence_ids=[initial["id"], p["id"]],
                 repair_rationale="根据节点、连接关系与参数匹配固定规则。",
             )
-        system = f"""You are the dedicated diagnostic agent for {r["robot_id"]} in a real Nav2 + Gazebo simulation. Investigate failed navigation using only observed evidence. Distinguish mechanisms: a live raw /scan with zero-rate /scan_faulted supports scan_interrupted; bt_navigator not active supports navigator_inactive; controller FollowPath vx_max=0 and vx_min=0 supports controller_velocity_zero. Use inspect_graph, measure_topics, read_parameters and sample_motion as needed. Never infer a hidden injected label. Cite only actual E identifiers. Different causes require their matching evidence and repair rationale. Summaries and rationale must be Chinese. Finish with finish_diagnosis; use unknown if evidence is insufficient. At most 6 rounds."""
+        system = f"""You are the dedicated diagnostic agent for {r["robot_id"]} in a real Nav2 + Gazebo simulation. Investigate failed navigation using only observed evidence. Distinguish mechanisms: a live raw /scan with zero-rate /scan_faulted supports scan_interrupted; bt_navigator not active supports navigator_inactive; controller FollowPath vx_max=0 and vx_min=0 supports controller_velocity_zero; localization_health.status=drifted with a measured AMCL-versus-Gazebo position error at or above its threshold supports localization_drift. Use inspect_graph, measure_topics, read_parameters and sample_motion as needed. Never infer a hidden injected label. Cite only actual E identifiers. Different causes require their matching evidence and repair rationale. Summaries and rationale must be Chinese. Finish with finish_diagnosis; use unknown if evidence is insufficient. At most 6 rounds."""
         messages = [
             {
                 "role": "system",
@@ -317,6 +318,13 @@ def infer(graph, params):
     controller = params.get("controller", {})
     if controller.get("vx_max") == 0.0 and controller.get("vx_min") == 0.0:
         return "controller_velocity_zero"
+    localization = graph.get("localization_health", {})
+    if (
+        localization.get("status") == "drifted"
+        and isinstance(localization.get("position_error"), (int, float))
+        and localization["position_error"] >= localization.get("threshold", 0.45)
+    ):
+        return "localization_drift"
     topics = graph.get("topics", {})
     if topics.get("raw_scan_hz", 0) > 0 and topics.get("nav2_scan_hz", 0) == 0:
         return "scan_interrupted"

@@ -131,6 +131,23 @@ def test_lifecycle_and_controller_faults_have_distinct_evidence():
     assert infer(healthy_graph, controller) == "controller_velocity_zero"
 
 
+def test_localization_drift_requires_measured_amcl_gazebo_divergence():
+    graph = {
+        "topics": {"raw_scan_hz": 10.0, "nav2_scan_hz": 10.0},
+        "nav2_lifecycle": {"bt_navigator": {"label": "active"}},
+        "localization_health": {
+            "status": "drifted", "position_error": 0.8, "threshold": 0.45,
+        },
+    }
+    params = {
+        "nav2_lifecycle": {"bt_navigator": {"label": "active"}},
+        "controller": {"vx_max": 0.5, "vx_min": -0.35},
+    }
+    assert infer(graph, params) == "localization_drift"
+    graph["localization_health"].update(status="aligned", position_error=0.2)
+    assert infer(graph, params) == "healthy"
+
+
 def test_fault_evaluation_counts_wrong_repairs_tools_and_tokens():
     from robot_debug_lab.evaluation import evaluate_run
 
@@ -152,6 +169,25 @@ def test_fault_evaluation_counts_wrong_repairs_tools_and_tokens():
     assert result["tool_calls"] == 1
     assert result["investigation_and_recovery_seconds"] == 1.234
     assert result["prompt_tokens"] == 12
+
+
+def test_localization_fault_evaluation_requires_matching_reseed():
+    from robot_debug_lab.evaluation import evaluate_run
+
+    run = {
+        "status": "verified",
+        "diagnosis": {"cause": "localization_drift"},
+        "validation": {"success": True},
+        "events": [{
+            "kind": "repair",
+            "data": {"operation": "reseed_amcl_from_gazebo_truth"},
+        }],
+    }
+
+    result = evaluate_run(run, "localization_drift", "rules")
+
+    assert result["identified_correctly"] is True
+    assert result["wrong_repairs"] == 0
 
 
 def test_mid_mission_evaluation_separates_planning_and_diagnosis_usage():
@@ -282,6 +318,22 @@ def test_independent_verdict_uses_fresh_gazebo_odometry():
     assert bridge.verdict("robot_1", 2.0, 0.5, time.monotonic(), "4")["success"]
     bridge.ground_truth["x"] = 1.0
     assert not bridge.verdict("robot_1", 2.0, 0.5, time.monotonic(), "4")["success"]
+
+
+def test_localization_health_compares_amcl_with_gazebo_truth():
+    from robot_debug_lab.nav2_bridge import Nav2Bridge
+
+    bridge = Nav2Bridge.__new__(Nav2Bridge)
+    bridge.data_lock = threading.RLock()
+    bridge.ground_truth = {"x": 1.0, "y": 2.0, "observed": time.time()}
+    bridge.pose = {"x": 1.8, "y": 2.0, "observed": time.time()}
+
+    health = bridge.localization_health("robot_1")
+
+    assert health["status"] == "drifted"
+    assert health["position_error"] == 0.8
+    bridge.pose["x"] = 1.1
+    assert bridge.localization_health("robot_1")["status"] == "aligned"
 
 
 @pytest.mark.parametrize(

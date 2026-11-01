@@ -10,7 +10,7 @@
 
 例如“机器人去实体障碍箱回来后去充电”会由 OpenFang 一次性核验多个地点，生成并执行“障碍箱安全接近点 → 返回起点 → 充电站 → 明确标注的仿真充电”。网关还会检查步骤间业务约束：仿真充电必须紧跟在到达充电站之后，漏掉导航或把充电放在其他地点的计划会退回同一 Agent 修正，不会下发。“去货架 A 拿货”则会查询能力目录；当前 TurtleBot3 没有抓取技能，因此返回零执行步骤和可用替代方案，不会把拿货偷偷替换成等待或声称完成。用户接受替代方案后，Agent 会结合前后两轮对话重新规划。
 
-故障实验包含三种不同机制：`/scan → /scan_faulted` 中断、Nav2 lifecycle 整组 inactive、controller 前后向速度上限同时为零。AI 看不到注入标签，只能调用只读工具检查 ROS 节点、话题速率、lifecycle 状态、参数和运动状态。网关要求原因与现场证据一致后，才执行对应的白名单修复并重放相同目标。成功与否由 Gazebo 里程计误差 `< 0.35 m` 判定。
+故障实验包含四种不同机制：`/scan → /scan_faulted` 中断、Nav2 lifecycle 整组 inactive、controller 前后向速度上限同时为零，以及 AMCL 位姿与 Gazebo 真值分离。AI 看不到注入标签，只能调用只读工具检查 ROS 节点、话题速率、lifecycle、参数、运动状态和两套位姿的实测偏差。网关要求原因与现场证据一致后，才执行对应的白名单修复并重放相同目标。成功与否由 Gazebo 里程计误差 `< 0.35 m` 判定。
 
 本机 2026-10-29 的真实验收结果（摘要见 [验收记录](docs/nav2-acceptance-results.json)）：
 
@@ -21,7 +21,7 @@
 
 规则模式用于证明故障装置和修复链路本身可靠；AI 模式用于证明模型确实参与调查。模型不直接发布速度，也不能执行 shell、任意参数修改或任意代码。
 
-三种故障的 AI 与规则矩阵均已通过，包含识别、任务恢复、错修复、工具调用、耗时和 token 指标，见 [故障评测结果](docs/fault-evaluation-results.json)。
+前三种故障的三轮 AI/规则矩阵见[故障评测结果](docs/fault-evaluation-results.json)。第四种定位漂移也完成了独立 AI/规则对照：两种模式均正确识别并恢复原任务，错误修复为 0，详见[定位漂移结果](docs/localization-drift-results.json)。
 
 任务级恢复另有一个真实动态场景：后端通过 Gazebo `set_pose` 把实体 `temporary_crate` 移到货架 A 的默认接近点。首次 Nav2 导航必须实际失败；程序先用新鲜 ROS 状态排除已知系统故障，然后重规划 Agent 读取任务进度和经过审核的候选接近点，只能选择 Nav2 实测可达的替代点。网关保留已完成和后续步骤、记录计划版本，再由 Gazebo 验收重试结果。Agent 看不到场景注入标签，也不能编造坐标。真实结果见[重规划验收记录](docs/replanning-acceptance-results.json)。
 
@@ -29,11 +29,13 @@
 
 2026-10-31 又完成了同一步组合故障验收：任务在前往货架 A 时先遇到 `navigator_inactive`，诊断 Agent 用 ROS 证据选择 lifecycle 白名单修复；相同目标重放后又被真实 `temporary_crate` 阻塞。程序重新确认导航栈健康后才允许路线 Agent 查询任务状态和 Nav2 路径，选择货架 A 的 `southwest` 接近点，并继续执行等待和 idle。5/5 步完成，Gazebo 最终位置误差 0.182 m；详见[组合恢复记录](docs/combined-recovery-results.json)。
 
+定位漂移还通过了复杂任务中途验收：AI 与规则复用同一个模型计划，在第二次真实导航前触发 AMCL 偏置；两种模式都保留 S1、恢复 S2 并继续完成 S3/S4，错误修复为 0。AI 使用现场 AMCL/Gazebo 偏差完成诊断，没有降级为规则结果。详见[定位漂移任务结果](docs/localization-mission-results.json)。
+
 ## 开发阶段
 
 **第一阶段后端已完成。** 当前具备简单任务零模型解析、复杂任务 ReAct 规划、统一语义场景、多步骤顺序执行、澄清续接、能力缺口协商、可观察仿真充电、取消和最终验收。额外完成了基于真实 Gazebo 障碍与 Nav2 路径证据的受限任务重规划。
 
-**第二阶段已有可重复运行的闭环。** 三种机制不同的 ROS/Nav2 故障、AI/规则对照和自动评测矩阵均已落地；复杂任务中途发生系统故障后，可保留已完成步骤、修复失败步骤并继续后续步骤。三轮 18 项真实矩阵和“系统修复后同一步再做路线恢复”的组合案例均已通过。下一步重点是把长路线暴露的 AMCL/Gazebo 位姿偏差做成独立定位故障，并降低 Agent 调查 token 波动。动态代价地图候选生成、任意条件任务图、重启续跑、多机器人和实体取放仍属于后续范围。
+**第二阶段后端已完成。** 四种机制不同的 ROS/Nav2 故障、AI/规则对照、复杂任务中途恢复、自动评测和“系统修复后同一步再做路线恢复”的组合案例均已落地。定位漂移使用真实 `/initialpose` 改变 AMCL 状态，并以 Gazebo 真值重新播种作为仿真专用白名单修复。下一阶段开始前先进行人工验收；第二台机器人、多 Agent 调度属于第三阶段。动态代价地图候选生成、任意条件任务图、重启续跑和实体取放仍属于后续扩展。
 
 ## 系统结构
 
@@ -54,7 +56,7 @@ flowchart LR
 网页有四个清晰区域：
 
 1. **自然语言任务**：简单目标走确定性语义表；复杂指令通过真实场景工具形成有序步骤；历史下拉框只用于查看记录。
-2. **运行现场与故障实验**：显示 Gazebo 里程计轨迹、当前活动目标和雷达速率，支持三种机制不同的故障。
+2. **运行现场与故障实验**：显示 Gazebo 里程计轨迹、当前活动目标、雷达速率和 AMCL/Gazebo 偏差，支持四种机制不同的故障。
 3. **AI 诊断与证据**：对比 AI 和规则基线，查看每次工具调用、证据引用、修复和复测结果。
 4. **真实源码案例**：隔离复现 Nav2 #5710，要求 AI 生成受限 C++ 补丁、重新编译并通过独立测试。
 
@@ -104,6 +106,8 @@ AI 模式需要在 `.env` 配置直连模型，或设置 `RDL_AGENT_BACKEND=open
 .venv/bin/python scripts/acceptance_combined_recovery.py --fault navigator_inactive
 .venv/bin/python scripts/evaluate_fault_matrix.py --mode both
 .venv/bin/python scripts/evaluate_mission_faults.py --fault all --mode both --trials 3 --resume
+# 单独复现第四种定位故障
+.venv/bin/python scripts/evaluate_fault_matrix.py --fault localization_drift --mode both
 ```
 
 ## 真实 Nav2 源码案例
