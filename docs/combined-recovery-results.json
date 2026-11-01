@@ -1,0 +1,118 @@
+{
+  "generated_at": 1793512579.1200697,
+  "run_id": "cac6987554e9",
+  "plan_id": "ba31713d45a7",
+  "prompt": "先去充电站，然后去货架 A，最后在原地等待。",
+  "fault": "navigator_inactive",
+  "scenario": {
+    "applied": "shelf_a_primary_blocked",
+    "robot_id": "robot_1",
+    "entity": "temporary_crate",
+    "pose": {
+      "x": 2.0,
+      "y": 0.5,
+      "z": 0.35
+    }
+  },
+  "scheduled_navigation_attempt": 2,
+  "status": "verified",
+  "system_diagnosis": {
+    "cause": "navigator_inactive",
+    "summary": "导航目标在下发瞬间即被拒绝（elapsed=0.0，message=goal_rejected），机器人未产生任何位移。E11 与 E14 均显示 /bt_navigator 生命周期状态为 inactive（id=2），说明行为树导航器未激活，无法接受并执行目标。同时已排除另外两种机制：E11、E13 显示原始 /scan 与送入 Nav2 的扫描均为 5.0 Hz 且 scan_forwarding=true，激光数据链路正常（E14 中 scan_input 虽标记为 /scan_faulted、故障边界在 laser_forwarder，但实测速率并非零，故不构成 scan_interrupted 证据）；E14 显示控制器速度限幅 vx_max=0.5、vx_min=-0.35，并非全零，故不构成 controller_velocity_zero 证据。",
+    "evidence_ids": [
+      "E11",
+      "E13",
+      "E14"
+    ],
+    "repair_rationale": "根因是 bt_navigator 处于 inactive，需通过 Nav2 生命周期管理将其激活（如对 /bt_navigator 执行 configure + activate，或使用 lifecycle_manager_nav2 重新拉起全部 Nav2 节点），激活后重新下发目标即可。由于激光链路速率正常、控制器速度限幅非零，无需修改激光转发配置或速度限制参数；不应进行扫描链路或速度参数相关修复。"
+  },
+  "system_repair": {
+    "operation": "resume_nav2_lifecycle",
+    "state": {
+      "node": "/bt_navigator",
+      "id": 3,
+      "label": "active"
+    }
+  },
+  "post_repair_preflight": {
+    "cause": "healthy",
+    "source": "deterministic_post_repair_preflight",
+    "evidence_ids": [
+      "E19"
+    ],
+    "summary": "系统故障已恢复，但原语义接近点仍实测不可达。"
+  },
+  "selected_approach": "southwest",
+  "attempts": [
+    {
+      "phase": "initial",
+      "approach_id": "west",
+      "success": false,
+      "error": 7.0355,
+      "message": "goal_rejected"
+    },
+    {
+      "phase": "post_repair_replay",
+      "approach_id": "west",
+      "success": false,
+      "error": 1.1413,
+      "message": "navigation_timeout"
+    },
+    {
+      "phase": "replanned",
+      "approach_id": "southwest",
+      "success": true,
+      "error": 0.182,
+      "message": "4"
+    }
+  ],
+  "plan_version": 2,
+  "replan_count": 1,
+  "completed_steps": [
+    "S1",
+    "S2",
+    "S3",
+    "S4",
+    "S5"
+  ],
+  "tool_calls": [
+    "inspect_graph",
+    "measure_topics",
+    "read_parameters",
+    "get_mission_state",
+    "list_approach_options"
+  ],
+  "usage": {
+    "prompt_tokens": 29168,
+    "completion_tokens": 1180
+  },
+  "acceptance": {
+    "success": true,
+    "completed_steps": 5,
+    "total_steps": 5,
+    "final_pose_validation": {
+      "success": true,
+      "error": 0.182,
+      "elapsed": 7.52,
+      "target": [
+        2.0,
+        -1.0
+      ],
+      "pose": {
+        "x": 1.8705584090401608,
+        "y": -1.1278742081096493,
+        "theta": 6.037012712980905,
+        "speed": 0.047890317984933255,
+        "observed": 1793512567.3261602,
+        "source": "gazebo_odometry"
+      },
+      "message": "4"
+    },
+    "plan_version": 2,
+    "replan_count": 1,
+    "fault_recovery_count": 1,
+    "recovered_step_ids": [
+      "S3"
+    ]
+  }
+}

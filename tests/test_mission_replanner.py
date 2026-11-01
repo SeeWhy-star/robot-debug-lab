@@ -24,9 +24,10 @@ class RouteBridge:
 
 
 class ReplanModel:
-    def __init__(self, approach_id="southwest"):
+    def __init__(self, approach_id="southwest", prior_evidence_ids=None):
         self.round = 0
         self.approach_id = approach_id
+        self.prior_evidence_ids = prior_evidence_ids or []
 
     @staticmethod
     def call(name, arguments):
@@ -52,7 +53,7 @@ class ReplanModel:
             return self.call("list_approach_options", {"object_id": "shelf_a"}), {
                 "prompt_tokens": 4, "completion_tokens": 1,
             }
-        evidence = [
+        evidence = self.prior_evidence_ids + [
             json.loads(message["content"])["id"]
             for message in messages
             if message.get("role") == "tool" and "id" in json.loads(message["content"])
@@ -122,3 +123,30 @@ def test_agent_cannot_select_failed_or_unreachable_approach(tmp_path):
 
     with pytest.raises(ModelError, match="不可达"):
         replanner.replan(run, 1, threading.Event())
+
+
+def test_agent_may_cite_verified_post_repair_preflight_evidence(tmp_path):
+    store = Store(tmp_path / "runs.db")
+    run = failed_run(store)
+    event = store.event(
+        run,
+        "route_preflight",
+        "S2 修复后导航栈复检",
+        {"cause": "healthy"},
+    )
+    run["steps"][1]["post_repair_preflight"] = {
+        "cause": "healthy",
+        "evidence_ids": [event["id"]],
+    }
+    store.save(run)
+    replanner = MissionReplanner(
+        store,
+        RouteBridge(),
+        SemanticScene(),
+        model=ReplanModel(prior_evidence_ids=[event["id"]]),
+    )
+
+    result = replanner.replan(run, 1, threading.Event())
+
+    assert event["id"] in result["evidence_ids"]
+    assert result["replacement_step"]["approach_id"] == "southwest"

@@ -47,6 +47,7 @@ Run the live incident acceptance against a running server:
 .venv/bin/python scripts/acceptance_nav2.py --mode ai
 .venv/bin/python scripts/acceptance_missions.py --reset
 .venv/bin/python scripts/acceptance_replanning.py
+.venv/bin/python scripts/acceptance_combined_recovery.py --fault navigator_inactive
 .venv/bin/python scripts/evaluate_fault_matrix.py --mode both
 .venv/bin/python scripts/evaluate_mission_faults.py --fault all --mode both --trials 3 --resume
 ```
@@ -73,11 +74,13 @@ A separate [live replanning result](docs/replanning-acceptance-results.json) mov
 
 Faults can also be armed for the Nth real navigation call of an ordered mission without exposing that schedule through Agent tools. The committed [mid-mission fault matrix](docs/mission-fault-evaluation-results.json) contains three trials across three mechanisms and AI/rules recovery: all 18 real missions identified the fault, preserved S1, recovered S2, finished later steps, and made zero wrong repairs. Each trial generates one model plan and reuses that server-validated plan for its six controlled comparisons. AI recovery averaged 27.738–46.804 seconds and 12,094–20,099 diagnosis tokens depending on mechanism; individual token use still varied substantially.
 
+The [combined recovery acceptance](docs/combined-recovery-results.json) exercises two failures on the same mission step. The diagnostic Agent first identifies and repairs an inactive Nav2 lifecycle. Replaying the identical Shelf A target then encounters the physical crate. Only after a fresh deterministic stack check reports healthy may the route Agent inspect mission and Nav2 path evidence, select the reviewed `southwest` approach, and continue the waiting and idle steps. The live run completed all five steps with 0.182 m Gazebo odometry error.
+
 ## Development status
 
 **Phase 1 backend is complete:** zero-token atomic routing, tool-grounded ReAct planning, an authoritative semantic scene, ordered multi-step execution, contextual clarification, capability negotiation, observable simulated charging, cancellation, and independent acceptance are implemented. Evidence-grounded recovery from a blocked semantic approach is also working end to end.
 
-**Phase 2 has a repeatable closed loop:** three distinct ROS/Nav2 failures, AI-versus-rules comparison, and an automated evaluation matrix are present. A system fault can occur after a complex mission has started; completed steps are preserved, the failed step is repaired and replayed, and later steps continue. The three-trial, 18-run live matrix passes. Investigation-token variance and combined route/system failures remain the next work, alongside costmap-derived candidate generation, general conditional task graphs, restart resumption, multi-robot operation, and physical manipulation.
+**Phase 2 has a repeatable closed loop:** three distinct ROS/Nav2 failures, AI-versus-rules comparison, and an automated evaluation matrix are present. A system fault can occur after a complex mission has started; completed steps are preserved, the failed step is repaired and replayed, and later steps continue. The three-trial, 18-run live matrix and the combined system-plus-route recovery both pass. The next work is treating long-route AMCL/Gazebo pose divergence as a separate localization fault and reducing investigation-token variance, alongside costmap-derived candidate generation, general conditional task graphs, restart resumption, multi-robot operation, and physical manipulation.
 
 ## Real Nav2 source case
 

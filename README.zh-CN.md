@@ -27,11 +27,13 @@
 
 故障现在也能在复杂任务执行到第 N 次真实导航时触发。触发计划只存在于确定性实验装置中，不会出现在 Agent 的 ROS 工具结果里。2026-10-30 使用“障碍箱旁边 → 起点 → 充电站 → 等待”完成了 3 轮、3 种故障、AI/规则两种恢复模式，共 18 次真实任务：故障识别率和原任务恢复率均为 100%，每次都保留 S1、恢复 S2 并继续后续步骤，错误修复总数为 0。三轮分别只生成一次复杂计划，轮内六项复用同一份后端验证计划。AI 平均恢复时间为 27.738–46.804 秒，规则为 21.167–37.409 秒；AI 诊断平均消耗 12,094–20,099 tokens，且个别运行存在明显波动。完整数据见[任务中途故障矩阵](docs/mission-fault-evaluation-results.json)。
 
+2026-10-31 又完成了同一步组合故障验收：任务在前往货架 A 时先遇到 `navigator_inactive`，诊断 Agent 用 ROS 证据选择 lifecycle 白名单修复；相同目标重放后又被真实 `temporary_crate` 阻塞。程序重新确认导航栈健康后才允许路线 Agent 查询任务状态和 Nav2 路径，选择货架 A 的 `southwest` 接近点，并继续执行等待和 idle。5/5 步完成，Gazebo 最终位置误差 0.182 m；详见[组合恢复记录](docs/combined-recovery-results.json)。
+
 ## 开发阶段
 
 **第一阶段后端已完成。** 当前具备简单任务零模型解析、复杂任务 ReAct 规划、统一语义场景、多步骤顺序执行、澄清续接、能力缺口协商、可观察仿真充电、取消和最终验收。额外完成了基于真实 Gazebo 障碍与 Nav2 路径证据的受限任务重规划。
 
-**第二阶段已有可重复运行的闭环。** 三种机制不同的 ROS/Nav2 故障、AI/规则对照和自动评测矩阵均已落地；复杂任务中途发生系统故障后，可保留已完成步骤、修复失败步骤并继续后续步骤。三轮 18 项真实矩阵已经通过。下一步重点是降低 Agent 调查 token 波动，并增加“路线阻塞 + 系统故障”的组合案例。动态代价地图候选生成、任意条件任务图、重启续跑、多机器人和实体取放仍属于后续范围。
+**第二阶段已有可重复运行的闭环。** 三种机制不同的 ROS/Nav2 故障、AI/规则对照和自动评测矩阵均已落地；复杂任务中途发生系统故障后，可保留已完成步骤、修复失败步骤并继续后续步骤。三轮 18 项真实矩阵和“系统修复后同一步再做路线恢复”的组合案例均已通过。下一步重点是把长路线暴露的 AMCL/Gazebo 位姿偏差做成独立定位故障，并降低 Agent 调查 token 波动。动态代价地图候选生成、任意条件任务图、重启续跑、多机器人和实体取放仍属于后续范围。
 
 ## 系统结构
 
@@ -99,6 +101,7 @@ AI 模式需要在 `.env` 配置直连模型，或设置 `RDL_AGENT_BACKEND=open
 .venv/bin/python scripts/acceptance_nav2.py --mode ai
 .venv/bin/python scripts/acceptance_missions.py --reset
 .venv/bin/python scripts/acceptance_replanning.py
+.venv/bin/python scripts/acceptance_combined_recovery.py --fault navigator_inactive
 .venv/bin/python scripts/evaluate_fault_matrix.py --mode both
 .venv/bin/python scripts/evaluate_mission_faults.py --fault all --mode both --trials 3 --resume
 ```

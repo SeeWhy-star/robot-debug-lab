@@ -477,3 +477,107 @@ def test_mid_mission_fault_repairs_failed_step_without_replaying_completed_step(
         ("robot_1", -2.0, -0.5),
         ("robot_1", -4.0, -3.15),
     ]
+
+
+def test_system_repair_then_route_replan_recovers_same_mission_step(tmp_path):
+    class CombinedFailureBridge(MultiMechanismBridge):
+        def __init__(self):
+            super().__init__(None)
+            self.navigation_attempt = 0
+
+        def navigate(self, robot, x, y, cancel=None):
+            self.navigation_attempt += 1
+            if self.navigation_attempt == 2:
+                self.cause = "controller_velocity_zero"
+            self.moves.append((robot, x, y))
+            system_healthy = self.cause is None
+            route_open = (x, y) != (2.0, 0.5)
+            success = system_healthy and route_open
+            return {
+                "success": success,
+                "error": 0.1 if success else 1.3,
+                "target": [x, y],
+                "message": "reached" if success else "navigation_failed",
+            }
+
+    class ControllerAgent:
+        def diagnose(self, run, cancel):
+            return {
+                "cause": "controller_velocity_zero",
+                "summary": "控制器速度上下限均为零。",
+                "evidence_ids": ["E1"],
+                "repair_rationale": "恢复经过审核的控制器速度参数。",
+            }
+
+    class AlternateApproachReplanner:
+        def replan(self, run, index, cancel):
+            failed = run["steps"][index]
+            assert index == 1
+            assert run["steps"][0]["status"] == "completed"
+            assert failed["route_recovery_ready"] is True
+            assert failed["post_repair_preflight"]["cause"] == "healthy"
+            assert [attempt["phase"] for attempt in failed["attempts"]] == [
+                "initial", "post_repair_replay",
+            ]
+            replacement = dict(failed)
+            replacement.update(
+                x=2.0, y=-1.0, approach_id="southwest", status="pending",
+                failure_reason=None, pose_source="semantic_scene_registry_replan",
+            )
+            return {
+                "decision": "retry_with_approach", "failed_step_id": "S2",
+                "approach_id": "southwest", "reason": "默认点被实体障碍占用。",
+                "evidence_ids": ["E1", "E2"], "replacement_step": replacement,
+            }
+
+    bridge = CombinedFailureBridge()
+    store = Store(tmp_path / "combined.db")
+    flow = Workflow(bridge, store, replanner=AlternateApproachReplanner())
+    flow.agents["robot_1"] = ControllerAgent()
+    steps = [
+        {
+            "id": "S1", "action": "navigate", "destination_id": "charging_station",
+            "approach_id": "default", "x": -4.0, "y": -3.15,
+            "duration_seconds": None, "description": "先去充电站",
+            "auto_repair": True, "status": "pending",
+        },
+        {
+            "id": "S2", "action": "navigate", "destination_id": "shelf_a",
+            "approach_id": "west", "x": 2.0, "y": 0.5,
+            "duration_seconds": None, "description": "再去货架 A",
+            "auto_repair": True, "status": "pending",
+        },
+        {
+            "id": "S3", "action": "return_to_start", "destination_id": "start",
+            "approach_id": "default", "x": -2.0, "y": -0.5,
+            "duration_seconds": None, "description": "最后回起点",
+            "auto_repair": True, "status": "pending",
+        },
+    ]
+
+    run_id = flow.submit_mission(mission_plan(steps), mode="ai")["id"]
+    flow.pool.shutdown(wait=True)
+    result = store.get(run_id)
+    recovered = result["steps"][1]
+
+    assert result["status"] == "verified"
+    assert [step["status"] for step in result["steps"]] == ["completed"] * 3
+    assert recovered["diagnosis"]["cause"] == "controller_velocity_zero"
+    assert recovered["repair"]["operation"] == "restore_controller_velocity_limits"
+    assert recovered["post_repair_validation"]["success"] is False
+    assert recovered["post_repair_preflight"]["cause"] == "healthy"
+    assert recovered["approach_id"] == "southwest"
+    assert [attempt["phase"] for attempt in recovered["attempts"]] == [
+        "initial", "post_repair_replay", "replanned",
+    ]
+    assert result["mission_acceptance"]["fault_recovery_count"] == 1
+    assert result["mission_acceptance"]["replan_count"] == 1
+    assert bridge.moves == [
+        ("robot_1", -4.0, -3.15),
+        ("robot_1", 2.0, 0.5),
+        ("robot_1", 2.0, 0.5),
+        ("robot_1", 2.0, -1.0),
+        ("robot_1", -2.0, -0.5),
+    ]
+    kinds = [event["kind"] for event in result["events"]]
+    assert "failure_transition" in kinds

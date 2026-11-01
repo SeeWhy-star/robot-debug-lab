@@ -33,6 +33,12 @@ AI 还负责开放式故障调查：决定先看节点、参数、雷达速率�
 
 为保证 AI/规则对照使用完全相同的任务，Supervisor 支持只生成计划而不执行；后端保存通过 Schema 和场景工具验证的计划。评测重放前会再次核对每个语义目标的 `destination_id / approach_id / x / y` 与当前注册表是否一致，场景变化时拒绝旧计划。每轮只调用一次规划模型，六个故障恢复项复用该计划；续跑模式会跳过已经完整的 trial，部分 trial 则整轮重做，避免混用不同计划。
 
+## 同一步组合恢复
+
+一个导航步骤可能先因系统故障失败，修复后又因实体阻塞失败。执行器为每次尝试标记 `initial / post_repair_replay / replanned`，不会把第二次失败归到第一次故障。白名单修复后的重放仍失败时，程序必须重新读取话题、lifecycle 和 controller 状态；只有确定性复检为 `healthy` 才写入 `failure_transition` 并开放任务级重规划。路线 Agent 可以引用这条已存在的复检证据，但仍必须重新调用 `get_mission_state` 和 `list_approach_options`，并引用两者的新证据。若系统仍不健康，路线恢复被禁止。
+
+这条链路已经用 `navigator_inactive + temporary_crate` 做过真实 Gazebo/Nav2 验收：系统修复后 west 接近点重放失败，Nav2 证明 southwest 可达，计划版本增加后完成同一步及后续等待。组合验收刻意不放宽 Gazebo 位置阈值；另一次长路线返回起点时出现 Nav2 报成功但 Gazebo 误差 0.57 m，任务保持 unresolved，作为后续定位漂移故障边界。
+
 ## 运行状态
 
 诊断任务依次经过 `reproducing → investigating → repairing → validating → verified/unresolved`。多步骤任务为每一步记录开始、完成、失败原因与取消状态，并在最终验收后进入 `verified`。网页只显示后端明确标记的活动目标；拒绝、澄清和历史计划不会继续显示成当前目标。

@@ -129,7 +129,7 @@ class Workflow:
                 lock.release()
                 raise
 
-    def _mission_navigation(self, r, step, cancel):
+    def _mission_navigation(self, r, step, cancel, phase="initial"):
         rid = r["robot_id"]
         target = [step["x"], step["y"]]
         r.update(status="navigating", active_target=target, target=target)
@@ -137,7 +137,7 @@ class Workflow:
         baseline = self.bridge.navigate(rid, *target, cancel=cancel)
         step.setdefault("attempts", []).append({
             "target": target, "approach_id": step.get("approach_id"),
-            "result": baseline,
+            "phase": phase, "result": baseline,
         })
         step["baseline"] = baseline
         r["baseline"] = baseline
@@ -203,18 +203,62 @@ class Workflow:
         r["status"] = "validating"
         self.store.save(r)
         validation = self.bridge.navigate(rid, *target, cancel=cancel)
+        step.setdefault("attempts", []).append({
+            "target": target, "approach_id": step.get("approach_id"),
+            "phase": "post_repair_replay", "result": validation,
+        })
         step["validation"] = validation
+        step["post_repair_validation"] = validation
         r["validation"] = validation
         self.store.event(r, "validation", f"{step['id']} Gazebo 独立位置验收", validation)
-        if not validation["success"]:
-            step["failure_reason"] = "修复后重放未通过位置验收"
-        return validation["success"]
+        if validation["success"]:
+            return True
+
+        # A repaired system fault and a blocked semantic approach may occur on
+        # the same step. Re-observe the stack before allowing route recovery;
+        # the route Agent never gets to assume that the repair worked.
+        current = self.bridge.snapshot(rid)
+        params = self.bridge.parameters(rid)
+        post_repair_cause = infer(current, params)
+        if post_repair_cause == "healthy":
+            evidence = self.store.event(
+                r, "route_preflight", f"{step['id']} 修复后导航栈复检", {
+                    "topics": current.get("topics"),
+                    "nav2_lifecycle": params.get("nav2_lifecycle"),
+                    "controller": params.get("controller"),
+                    "post_repair_navigation_failure": validation,
+                    "system_repair": repair,
+                },
+            )
+            transition = {
+                "cause": "healthy",
+                "source": "deterministic_post_repair_preflight",
+                "evidence_ids": [evidence["id"]],
+                "summary": "系统故障已恢复，但原语义接近点仍实测不可达。",
+            }
+            step["post_repair_preflight"] = transition
+            step["route_recovery_ready"] = True
+            step["failure_reason"] = "系统修复已通过新鲜状态复检，但当前语义接近点仍不可达"
+            self.store.event(
+                r, "failure_transition", f"{step['id']} 从系统恢复转入路线恢复",
+                transition,
+            )
+        else:
+            step["failure_reason"] = "修复后重放失败，且系统状态复检仍不健康"
+            self.store.event(r, "guard", f"{step['id']} 禁止路线重规划", {
+                "observed_cause": post_repair_cause,
+                "reason": "system_not_healthy_after_repair",
+            })
+        return False
 
     def _replan_failed_navigation(self, r, index, step, cancel):
         if (
             self.replanner is None
             or r.get("mode") != "ai"
-            or (step.get("diagnosis") or {}).get("cause") != "healthy"
+            or (
+                (step.get("diagnosis") or {}).get("cause") != "healthy"
+                and not step.get("route_recovery_ready")
+            )
             or len(r.get("plan_revisions", [])) >= 2
         ):
             return False
@@ -222,6 +266,8 @@ class Workflow:
         self.store.event(r, "replan_started", f"{step['id']} 启动任务级重规划", {
             "failed_target": [step.get("x"), step.get("y")],
             "failed_approach_id": step.get("approach_id"),
+            "system_repair": step.get("repair"),
+            "post_repair_preflight": step.get("post_repair_preflight"),
             "preserved_completed_steps": [
                 item["id"] for item in r["steps"][:index]
                 if item.get("status") == "completed"
@@ -258,7 +304,7 @@ class Workflow:
         r["plan_revisions"].append(record)
         self.store.event(r, "replan_applied", f"{step['id']} 应用受限重规划", record)
         self.store.save(r)
-        return self._mission_navigation(r, step, cancel)
+        return self._mission_navigation(r, step, cancel, phase="replanned")
 
     def run_mission(self, r, cancel):
         rid = r["robot_id"]

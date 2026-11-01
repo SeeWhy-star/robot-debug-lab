@@ -112,7 +112,8 @@ class MissionReplanner:
                 key: steps[failed_index].get(key)
                 for key in [
                     "id", "action", "destination_id", "approach_id", "description",
-                    "baseline", "failure_reason",
+                    "baseline", "failure_reason", "attempts", "repair",
+                    "post_repair_validation", "post_repair_preflight",
                 ]
             },
             "remaining_steps": [
@@ -161,11 +162,22 @@ class MissionReplanner:
         messages = [
             {"role": "system", "content": REPLAN_SYSTEM},
             {"role": "user", "content": json.dumps({
-                "navigation_failure": failed.get("baseline"),
+                "navigation_failure": (
+                    failed.get("post_repair_validation") or failed.get("baseline")
+                ),
                 "failed_step_id": failed["id"],
+                "system_repair": failed.get("repair"),
+                "post_repair_preflight": failed.get("post_repair_preflight"),
             }, ensure_ascii=False)},
         ]
-        evidence = {}
+        prior_evidence_ids = set(
+            (failed.get("post_repair_preflight") or {}).get("evidence_ids", [])
+        )
+        evidence = {
+            event["id"]: event
+            for event in run.get("events", [])
+            if event.get("id") in prior_evidence_ids
+        }
         observed_options = {}
         protocol_retries = 0
         try:
