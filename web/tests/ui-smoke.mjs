@@ -16,6 +16,10 @@ export async function smoke(browser) {
       page.on("pageerror", (error) => errors.push(String(error)));
       await page.goto("http://127.0.0.1:8765");
       await page.getByText("实时连接正常").waitFor({ state: "attached" });
+      assert.equal(await page.locator(".robot-card").count(), 2, "two live robot cards expected");
+      await page.getByRole("button", { name: "车队协同 Agent", exact: true }).click();
+      assert.match(await page.locator("#instruction").getAttribute("placeholder"), /另一台/);
+      await page.getByRole("button", { name: "所选机器人", exact: true }).click();
       await page.getByRole("button", { name: "新建指令", exact: true }).click();
       assert.equal(await page.getByRole("button", { name: "解析并执行任务", exact: true }).isDisabled(), true);
       await page.getByRole("button", { name: "导航示例", exact: true }).click();

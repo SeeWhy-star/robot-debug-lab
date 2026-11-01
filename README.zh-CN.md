@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-一个基于 **Gazebo Sim + Nav2 + OpenFang** 的 ROS 2 故障诊断与恢复工作台。机器人在真实导航栈中执行任务；AI 负责选择调查工具、引用现场证据和提出修复原因，程序只允许执行经过新鲜证据核验的白名单动作，最后用 Gazebo 里程计独立验收原任务。
+一个基于 **Gazebo Sim + Nav2 + OpenFang** 的 ROS 2 多机器人任务、故障诊断与恢复工作台。两台机器人在同一个真实仿真世界中运行各自独立的传感器、TF、AMCL和Nav2；AI负责复杂任务分工、选择调查工具和组织现场证据，确定性程序负责原子分派、权限、白名单动作和Gazebo独立验收。
 
 ## 核心案例
 
@@ -35,7 +35,9 @@
 
 **第一阶段后端已完成。** 当前具备简单任务零模型解析、复杂任务 ReAct 规划、统一语义场景、多步骤顺序执行、澄清续接、能力缺口协商、可观察仿真充电、取消和最终验收。额外完成了基于真实 Gazebo 障碍与 Nav2 路径证据的受限任务重规划。
 
-**第二阶段后端已完成。** 四种机制不同的 ROS/Nav2 故障、AI/规则对照、复杂任务中途恢复、自动评测和“系统修复后同一步再做路线恢复”的组合案例均已落地。定位漂移使用真实 `/initialpose` 改变 AMCL 状态，并以 Gazebo 真值重新播种作为仿真专用白名单修复。下一阶段开始前先进行人工验收；第二台机器人、多 Agent 调度属于第三阶段。动态代价地图候选生成、任意条件任务图、重启续跑和实体取放仍属于后续扩展。
+**第二阶段后端已完成。** 四种机制不同的 ROS/Nav2 故障、AI/规则对照、复杂任务中途恢复、自动评测和“系统修复后同一步再做路线恢复”的组合案例均已落地。定位漂移使用真实 `/initialpose` 改变 AMCL 状态，并以 Gazebo 真值重新播种作为仿真专用白名单修复。动态代价地图候选生成、任意条件任务图、重启续跑和实体取放仍属于后续扩展。
+
+**第三阶段已经完成第一条真实闭环。** Gazebo中现在有两台实体TurtleBot3，各自使用`/robot_1`和`/robot_2`命名空间运行独立雷达、里程计、TF、AMCL和Nav2。车队OpenFang Agent必须先查询两台机器人的实时位置与健康状态，再查询统一语义地点，输出每台机器人的结构化子任务；后端先同时占用两台机器人，全部可分派后才并行启动，并限制唯一充电站不能被同时分配。原生Gazebo GUI模式的[真实车队验收](docs/fleet-acceptance-results.json)中，两项任务都通过，Gazebo位置误差分别为0.236 m和0.037 m。下一步仍需完成狭窄通道预约、死锁处理、单机无法恢复后的任务接替和车队评测矩阵，因此第三阶段尚未完成。
 
 ## 系统结构
 
@@ -43,6 +45,10 @@
 flowchart LR
   UI[React 调试台] --> API[FastAPI 任务网关]
   API --> Nav2[Nav2 导航任务]
+  API --> Fleet[OpenFang 车队 Agent]
+  Fleet --> Batch[原子分派与共享资源约束]
+  Batch --> R1[Robot 01 Agent + Nav2]
+  Batch --> R2[Robot 02 Agent + Nav2]
   Nav2 -->|失败| Agent[OpenFang 诊断 Agent]
   Agent --> Tools[只读 ROS 工具]
   Tools --> Evidence[带 E 编号的现场证据]
@@ -95,6 +101,7 @@ AI 模式需要在 `.env` 配置直连模型，或设置 `RDL_AGENT_BACKEND=open
 5. 点击“注入故障”，确认原始雷达仍有数据，而 Nav2 雷达输入变为 0 Hz。
 6. 选择“模型 AI”，勾选限定修复，点击“开始诊断”，在时间线查看证据、修复和同目标复测。
 7. 切换“规则基线”重复实验，对比事件数、结论和 token 消耗。
+8. 在自然语言任务中选择“车队协同 Agent”，输入“让更合适的一台去货架A，另一台去充电站并等待5秒”，查看模型读取实时车队状态、生成分工并同时执行。
 
 自动验收命令会重置仿真并执行完整故障闭环：
 
@@ -104,6 +111,7 @@ AI 模式需要在 `.env` 配置直连模型，或设置 `RDL_AGENT_BACKEND=open
 .venv/bin/python scripts/acceptance_missions.py --reset
 .venv/bin/python scripts/acceptance_replanning.py
 .venv/bin/python scripts/acceptance_combined_recovery.py --fault navigator_inactive
+.venv/bin/python scripts/acceptance_fleet.py --reset
 .venv/bin/python scripts/evaluate_fault_matrix.py --mode both
 .venv/bin/python scripts/evaluate_mission_faults.py --fault all --mode both --trials 3 --resume
 # 单独复现第四种定位故障
@@ -123,6 +131,6 @@ npm --prefix web run build
 npm --prefix web audit
 ```
 
-`.runtime/` 保存仿真日志、SQLite 历史和源码案例产物，不会提交。项目是单机仿真研究原型，不代表实体机器人安全系统、生产级调度集群或通用自动修复能力。
+`.runtime/` 保存仿真日志、SQLite 历史和源码案例产物，不会提交。项目是双机器人本地仿真研究原型，不代表实体机器人安全系统、生产级调度集群或通用自动修复能力。
 
 更多内容：[架构与边界](docs/architecture.md)、[项目表达](docs/project-brief.md)、[OpenFang](docs/openfang.md)。

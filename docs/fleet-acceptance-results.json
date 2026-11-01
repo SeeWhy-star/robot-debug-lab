@@ -1,0 +1,61 @@
+{
+  "recorded_at": "2026-11-01T07:48:11.730717+00:00",
+  "runtime": "openfang",
+  "plan_id": "f589cda7ec64",
+  "planner_backend": "openfang",
+  "planning_usage": {
+    "prompt_tokens": 37324,
+    "completion_tokens": 2201
+  },
+  "tool_calls": [
+    "get_fleet_state",
+    "resolve_destinations"
+  ],
+  "assignments": [
+    {
+      "robot_id": "robot_2",
+      "rationale": "robot_2 当前 (-2.0, 0.5) 距货架A 约 4.00m，比 robot_1 的 4.12m 更近，定位误差也更小（0.036m < 0.041m），因此由它前往货架A。",
+      "steps": [
+        "navigate",
+        "enter_idle"
+      ],
+      "destinations": [
+        "shelf_a"
+      ]
+    },
+    {
+      "robot_id": "robot_1",
+      "rationale": "robot_1 当前 (-2.0, -0.5) 距充电站约 3.32m，明显近于 robot_2 的 4.16m；充电站容量为 1，本计划仅派 robot_1 前往，不会同时占用。",
+      "steps": [
+        "navigate",
+        "simulate_charge",
+        "wait"
+      ],
+      "destinations": [
+        "charging_station"
+      ]
+    }
+  ],
+  "runs": [
+    {
+      "run_id": "78bfc34058b7",
+      "robot_id": "robot_2",
+      "status": "verified",
+      "completed_steps": 2,
+      "total_steps": 2,
+      "final_gazebo_error": 0.2358
+    },
+    {
+      "run_id": "994271f299fc",
+      "robot_id": "robot_1",
+      "status": "verified",
+      "completed_steps": 3,
+      "total_steps": 3,
+      "final_gazebo_error": 0.0372
+    }
+  ],
+  "nav2_online_after": {
+    "robot_1": true,
+    "robot_2": true
+  }
+}

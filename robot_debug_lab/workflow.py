@@ -12,7 +12,7 @@ class Workflow:
         self.replanner = replanner
         robot_ids = tuple(getattr(bridge, "robot_ids", bridge.locks.keys()))
         self.agents = {rid: RobotAgent(bridge, store, robot=rid) for rid in robot_ids}
-        self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+        self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=max(2, len(robot_ids)))
         self.cancel_events = {}
         self.dispatch_lock = threading.Lock()
         self.closed = False
@@ -27,8 +27,8 @@ class Workflow:
         ids = [t.robot_id for t in tasks]
         if any(rid not in self.bridge.locks for rid in ids):
             raise ValueError("任务包含当前仿真中不存在的机器人")
-        if len(tasks) != 1 or len(set(ids)) != len(ids):
-            raise ValueError("每台机器人只能有一个目标")
+        if not tasks or len(tasks) > len(self.bridge.locks) or len(set(ids)) != len(ids):
+            raise ValueError("任务批次必须为每台机器人提供至多一个目标")
         acquired, runs = [], []
         gate = threading.Event()
         committed = False
@@ -84,6 +84,7 @@ class Workflow:
 
     def submit_mission(self, plan, mode="ai"):
         """Schedule one ordered mission while holding the robot reservation."""
+        rid = robot_id(plan.get("robot_id", "robot_1"))
         steps = deepcopy(plan.get("steps") or [])
         if not steps or len(steps) > 8:
             raise ValueError("任务必须包含 1 到 8 个步骤")
@@ -94,17 +95,17 @@ class Workflow:
                 raise ValueError("任务包含不支持的步骤")
             if step.get("action") in {"navigate", "return_to_start"}:
                 NavigationTask.model_validate({
-                    "robot_id": "robot_1", "x": step.get("x"), "y": step.get("y"),
+                    "robot_id": rid, "x": step.get("x"), "y": step.get("y"),
                     "auto_repair": bool(step.get("auto_repair")),
                 })
         with self.dispatch_lock:
             if self.closed:
                 raise ValueError("服务正在关闭")
-            lock = self.bridge.locks["robot_1"]
+            lock = self.bridge.locks[rid]
             if not lock.acquire(False):
-                raise ValueError("robot_1 正在执行任务，请等待或取消后重试")
+                raise ValueError(f"{rid} 正在执行任务，请等待或取消后重试")
             try:
-                r = self.store.new("robot_1", mode, plan["request_text"])
+                r = self.store.new(rid, mode, plan["request_text"])
                 r.update(
                     backend=plan.get("backend", AGENT_BACKEND),
                     planner_backend=plan.get("backend", AGENT_BACKEND),
@@ -127,6 +128,83 @@ class Workflow:
             except Exception:
                 self.cancel_events.pop(r["id"], None) if "r" in locals() else None
                 lock.release()
+                raise
+
+    def submit_fleet(self, plan, mode="ai"):
+        """Atomically reserve and start one ordered mission per assigned robot."""
+        assignments = deepcopy(plan.get("assignments") or [])
+        ids = [robot_id(item.get("robot_id")) for item in assignments]
+        if not assignments or len(assignments) > len(self.bridge.locks):
+            raise ValueError("车队计划必须包含一到两台机器人")
+        if len(set(ids)) != len(ids):
+            raise ValueError("车队计划不能重复分配同一机器人")
+        for assignment in assignments:
+            if not assignment.get("steps") or len(assignment["steps"]) > 8:
+                raise ValueError("每台机器人必须包含一到八个步骤")
+            for step in assignment["steps"]:
+                if step.get("action") not in {
+                    "navigate", "wait", "return_to_start", "enter_idle", "simulate_charge"
+                }:
+                    raise ValueError("车队任务包含不支持的步骤")
+                if step.get("action") in {"navigate", "return_to_start"}:
+                    NavigationTask.model_validate({
+                        "robot_id": assignment["robot_id"],
+                        "x": step.get("x"), "y": step.get("y"),
+                        "auto_repair": bool(step.get("auto_repair")),
+                    })
+        acquired, runs = [], []
+        with self.dispatch_lock:
+            if self.closed:
+                raise ValueError("服务正在关闭")
+            try:
+                for rid in sorted(ids):
+                    lock = self.bridge.locks[rid]
+                    if not lock.acquire(False):
+                        raise ValueError(f"{rid} 正在执行任务，车队批次未分派")
+                    acquired.append(lock)
+                for assignment in assignments:
+                    rid = assignment["robot_id"]
+                    child_plan = {
+                        key: deepcopy(value) for key, value in plan.items()
+                        if key != "assignments"
+                    }
+                    child_plan.update(
+                        robot_id=rid,
+                        steps=deepcopy(assignment["steps"]),
+                        fleet_plan_id=plan["id"],
+                        assignment_rationale=assignment.get("rationale"),
+                    )
+                    run = self.store.new(rid, mode, plan["request_text"])
+                    run.update(
+                        backend=plan.get("backend", AGENT_BACKEND),
+                        planner_backend=plan.get("backend", AGENT_BACKEND),
+                        task_type="fleet_mission",
+                        fleet_plan_id=plan["id"],
+                        plan=child_plan,
+                        steps=deepcopy(assignment["steps"]),
+                        current_step=None,
+                        active_target=None,
+                        target=None,
+                        target_history=[],
+                        plan_version=1,
+                        plan_revisions=[],
+                        planning_usage=deepcopy(plan.get("usage") or {}),
+                    )
+                    self.store.save(run)
+                    cancel = threading.Event()
+                    self.cancel_events[run["id"]] = cancel
+                    runs.append((run, cancel))
+                for run, cancel in runs:
+                    self.pool.submit(self.run_mission, run, cancel)
+                return [run for run, _ in runs]
+            except Exception:
+                for run, _ in runs:
+                    self.cancel_events.pop(run["id"], None)
+                    run.update(status="failed", error="车队批次未提交", finished=time.time())
+                    self.store.save(run)
+                for lock in acquired:
+                    if lock.locked():
+                        lock.release()
                 raise
 
     def _mission_navigation(self, r, step, cancel, phase="initial"):

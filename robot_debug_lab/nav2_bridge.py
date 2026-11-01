@@ -16,6 +16,7 @@ import signal
 import subprocess
 import threading
 import time
+from types import SimpleNamespace
 
 import rclpy
 from geometry_msgs.msg import PoseWithCovarianceStamped
@@ -37,28 +38,35 @@ from rclpy.qos import (
 )
 from sensor_msgs.msg import LaserScan
 
-from .config import ROOT, RUNTIME
+from .config import ROOT, RUNTIME, ROBOTS, ROBOT_STARTS
 
 
 WAREHOUSE_WORLD = ROOT / "simulation" / "worlds" / "rdl_warehouse.sdf.xacro"
 WAREHOUSE_MAP = ROOT / "simulation" / "maps" / "rdl_warehouse.yaml"
-START_X = -2.0
-START_Y = -0.5
+START_POSES = ROBOT_STARTS
 LOCALIZATION_DRIFT_THRESHOLD = 0.45
 
 
 def rewrite_nav2_params(text):
     """Guard navigation laser consumers while keeping AMCL localization live."""
-    return re.sub(
+    text = re.sub(
         r'^(\s*topic:\s*)[\"\']?scan[\"\']?\s*$',
         r"\1scan_faulted",
+        text,
+        flags=re.MULTILINE,
+    )
+    # Each AMCL instance otherwise races while renaming the same default
+    # /tmp/amcl_saved_pose file. This lab explicitly seeds every start/reset.
+    return re.sub(
+        r"^(\s*save_pose_rate:\s*)[0-9.]+\s*$",
+        r"\g<1>0.0",
         text,
         flags=re.MULTILINE,
     )
 
 
 class Nav2Bridge:
-    robot_ids = ("robot_1",)
+    robot_ids = ROBOTS
 
     def __init__(self):
         try:
@@ -77,77 +85,95 @@ class Nav2Bridge:
             "robot_debug_nav2_bridge",
             parameter_overrides=[Parameter("use_sim_time", value=True)],
         )
-        self.executor = MultiThreadedExecutor(num_threads=4)
+        self.executor = MultiThreadedExecutor(num_threads=8)
         self.executor.add_node(self.node)
         self.thread = threading.Thread(target=self.executor.spin, daemon=True)
         self.thread.start()
 
         self.data_lock = threading.RLock()
-        self.locks = {"robot_1": threading.Lock()}
-        self.pose = None
-        self.ground_truth = None
-        self.trace = deque(maxlen=500)
-        self.scan_forwarding = True
-        self.scan_raw_times = deque(maxlen=200)
-        self.scan_forwarded_times = deque(maxlen=200)
-        self.active_goal = None
+        self.locks = {robot: threading.Lock() for robot in self.robot_ids}
+        self.robots = {}
         self.scenario = None
-        self.navigation_attempt = 0
-        self.scheduled_fault = None
         self.log_handle = None
         self.sim = None
-
-        self.scan_pub = self.node.create_publisher(
-            LaserScan, "/scan_faulted", qos_profile_sensor_data
-        )
-        self.node.create_subscription(
-            LaserScan, "/scan", self._scan, qos_profile_sensor_data
-        )
-        self.node.create_subscription(
-            PoseWithCovarianceStamped, "/amcl_pose", self._pose, 10
-        )
-        self.node.create_subscription(Odometry, "/odom", self._odom, 10)
+        self.gui = None
         initial_pose_qos = QoSProfile(
             depth=1,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
             reliability=ReliabilityPolicy.RELIABLE,
         )
-        self.initial_pose_pub = self.node.create_publisher(
-            PoseWithCovarianceStamped, "/initialpose", initial_pose_qos
-        )
-        self.client = ActionClient(self.node, NavigateToPose, "/navigate_to_pose")
-        self.path_client = ActionClient(
-            self.node, ComputePathToPose, "/compute_path_to_pose"
-        )
-        self.lifecycle_client = self.node.create_client(
-            GetState, "/bt_navigator/get_state"
-        )
-        self.lifecycle_change_client = self.node.create_client(
-            ChangeState, "/bt_navigator/change_state"
-        )
-        self.controller_get_client = self.node.create_client(
-            GetParameters, "/controller_server/get_parameters"
-        )
-        self.controller_set_client = self.node.create_client(
-            SetParameters, "/controller_server/set_parameters"
-        )
-        self.lifecycle_manager_client = self.node.create_client(
-            ManageLifecycleNodes, "/lifecycle_manager_nav2/manage_nodes"
-        )
-        self.controller_defaults = {"vx_max": 0.5, "vx_min": -0.35}
+        for robot in self.robot_ids:
+            prefix = f"/{robot}"
+            runtime = SimpleNamespace(
+                pose=None,
+                ground_truth=None,
+                trace=deque(maxlen=500),
+                scan_forwarding=True,
+                scan_raw_times=deque(maxlen=200),
+                scan_forwarded_times=deque(maxlen=200),
+                active_goal=None,
+                navigation_attempt=0,
+                scheduled_fault=None,
+                controller_defaults={"vx_max": 0.5, "vx_min": -0.35},
+            )
+            runtime.scan_pub = self.node.create_publisher(
+                LaserScan, f"{prefix}/scan_faulted", qos_profile_sensor_data
+            )
+            runtime.initial_pose_pub = self.node.create_publisher(
+                PoseWithCovarianceStamped, f"{prefix}/initialpose", initial_pose_qos
+            )
+            runtime.client = ActionClient(
+                self.node, NavigateToPose, f"{prefix}/navigate_to_pose"
+            )
+            runtime.path_client = ActionClient(
+                self.node, ComputePathToPose, f"{prefix}/compute_path_to_pose"
+            )
+            runtime.lifecycle_client = self.node.create_client(
+                GetState, f"{prefix}/bt_navigator/get_state"
+            )
+            runtime.lifecycle_change_client = self.node.create_client(
+                ChangeState, f"{prefix}/bt_navigator/change_state"
+            )
+            runtime.controller_get_client = self.node.create_client(
+                GetParameters, f"{prefix}/controller_server/get_parameters"
+            )
+            runtime.controller_set_client = self.node.create_client(
+                SetParameters, f"{prefix}/controller_server/set_parameters"
+            )
+            runtime.lifecycle_manager_client = self.node.create_client(
+                ManageLifecycleNodes, f"{prefix}/lifecycle_manager_nav2/manage_nodes"
+            )
+            self.robots[robot] = runtime
+            self.node.create_subscription(
+                LaserScan, f"{prefix}/scan",
+                lambda message, rid=robot: self._scan(rid, message),
+                qos_profile_sensor_data,
+            )
+            self.node.create_subscription(
+                PoseWithCovarianceStamped, f"{prefix}/amcl_pose",
+                lambda message, rid=robot: self._pose(rid, message), 10,
+            )
+            self.node.create_subscription(
+                Odometry, f"{prefix}/odom",
+                lambda message, rid=robot: self._odom(rid, message), 10,
+            )
 
         self.params = self._prepare_nav2_params()
         try:
             self._start_sim()
-            self.controller_defaults = self.controller_config()
+            for robot in self.robot_ids:
+                self.robots[robot].controller_defaults = self.controller_config(robot)
         except Exception:
             self._stop_sim()
             raise
 
-    @staticmethod
-    def _require_robot(robot):
-        if robot != "robot_1":
-            raise ValueError("Nav2 场景当前只有 robot_1")
+    def _require_robot(self, robot):
+        if robot not in self.robots:
+            raise ValueError("当前仿真中不存在该机器人")
+
+    def _rt(self, robot):
+        self._require_robot(robot)
+        return self.robots[robot]
 
     def _prepare_nav2_params(self):
         source = Path("/opt/ros/lyrical/share/nav2_bringup/params/nav2_params.yaml")
@@ -163,18 +189,9 @@ class Nav2Bridge:
     def _spawn_sim(self, params):
         self.log_handle = (RUNTIME / "nav2-simulation.log").open("a")
         env = os.environ.copy()
-        headless = "false" if env.get("RDL_NATIVE_GUI") == "1" else "true"
-        use_rviz = "true" if env.get("RDL_NATIVE_GUI") == "1" else "false"
         command = [
-            "/opt/ros/lyrical/bin/ros2",
-            "launch",
-            "nav2_bringup",
-            "tb3_simulation_launch.py",
-            f"headless:={headless}",
-            f"use_rviz:={use_rviz}",
-            f"params_file:={params}",
-            f"world:={WAREHOUSE_WORLD}",
-            f"map:={WAREHOUSE_MAP}",
+            "/usr/bin/python3",
+            str(ROOT / "simulation/launch/rdl_multi_robot.launch.py"),
         ]
         return subprocess.Popen(
             command,
@@ -187,19 +204,22 @@ class Nav2Bridge:
 
     def _start_sim(self):
         self.sim = self._spawn_sim(self.params)
-        if not self.client.wait_for_server(timeout_sec=45):
-            if self.sim.poll() is not None:
-                raise RuntimeError(
-                    "Nav2/Gazebo 启动失败，请查看 .runtime/nav2-simulation.log"
-                )
-            raise RuntimeError("Nav2 导航服务在 45 秒内未就绪")
-        self._set_initial_pose()
-        self._wait_nav2_active()
+        for robot in self.robot_ids:
+            if not self._rt(robot).client.wait_for_server(timeout_sec=60):
+                if self.sim.poll() is not None:
+                    raise RuntimeError(
+                        "Nav2/Gazebo 启动失败，请查看 .runtime/nav2-simulation.log"
+                    )
+                raise RuntimeError(f"{robot} Nav2 导航服务在 60 秒内未就绪")
+        for robot in self.robot_ids:
+            self._set_initial_pose(robot)
+            self._wait_nav2_active(robot)
 
-    def _wait_nav2_active(self, timeout=45):
+    def _wait_nav2_active(self, robot, timeout=45):
         """Wait for the action server to be usable, not merely discoverable."""
-        if not self.lifecycle_client.wait_for_service(timeout_sec=timeout):
-            raise RuntimeError("Nav2 生命周期服务未就绪")
+        rt = self._rt(robot)
+        if not rt.lifecycle_client.wait_for_service(timeout_sec=timeout):
+            raise RuntimeError(f"{robot} Nav2 生命周期服务未就绪")
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if self.sim and self.sim.poll() is not None:
@@ -208,7 +228,7 @@ class Nav2Bridge:
                 )
             try:
                 state = self._wait(
-                    self.lifecycle_client.call_async(GetState.Request()), timeout=3
+                    rt.lifecycle_client.call_async(GetState.Request()), timeout=3
                 )
                 if state.current_state.label == "active":
                     return
@@ -218,6 +238,14 @@ class Nav2Bridge:
         raise RuntimeError("Nav2 在限定时间内未进入 active 状态")
 
     def _stop_sim(self):
+        if self.gui and self.gui.poll() is None:
+            os.killpg(self.gui.pid, signal.SIGINT)
+            try:
+                self.gui.wait(timeout=8)
+            except subprocess.TimeoutExpired:
+                os.killpg(self.gui.pid, signal.SIGKILL)
+                self.gui.wait()
+        self.gui = None
         if self.sim and self.sim.poll() is None:
             os.killpg(self.sim.pid, signal.SIGINT)
             try:
@@ -230,27 +258,31 @@ class Nav2Bridge:
             self.log_handle.close()
             self.log_handle = None
 
-    def _set_initial_pose(self):
+    def _set_initial_pose(self, robot):
+        rt = self._rt(robot)
+        start_x, start_y, start_yaw = START_POSES[robot]
         message = PoseWithCovarianceStamped()
         message.header.frame_id = "map"
-        message.pose.pose.position.x = START_X
-        message.pose.pose.position.y = START_Y
-        message.pose.pose.orientation.w = 1.0
+        message.pose.pose.position.x = start_x
+        message.pose.pose.position.y = start_y
+        message.pose.pose.orientation.z = math.sin(start_yaw / 2.0)
+        message.pose.pose.orientation.w = math.cos(start_yaw / 2.0)
         message.pose.covariance[0] = 0.25
         message.pose.covariance[7] = 0.25
         message.pose.covariance[35] = 0.07
         deadline = time.monotonic() + 15
-        while self.pose is None and time.monotonic() < deadline:
+        while rt.pose is None and time.monotonic() < deadline:
             message.header.stamp = self.node.get_clock().now().to_msg()
-            self.initial_pose_pub.publish(message)
+            rt.initial_pose_pub.publish(message)
             time.sleep(0.5)
-        if self.pose is None:
+        if rt.pose is None:
             raise RuntimeError(
-                "Nav2 已启动但定位未就绪，请查看 .runtime/nav2-simulation.log"
+                f"{robot} Nav2 已启动但定位未就绪，请查看 .runtime/nav2-simulation.log"
             )
 
-    def _publish_initial_pose(self, x, y, yaw=0.0, variance=0.0025, repeats=6):
+    def _publish_initial_pose(self, robot, x, y, yaw=0.0, variance=0.0025, repeats=6):
         """Publish one bounded AMCL seed through the real ROS interface."""
+        rt = self._rt(robot)
         message = PoseWithCovarianceStamped()
         message.header.frame_id = "map"
         message.pose.pose.position.x = float(x)
@@ -262,14 +294,14 @@ class Nav2Bridge:
         message.pose.covariance[35] = max(float(variance), 0.001)
         for _ in range(repeats):
             message.header.stamp = self.node.get_clock().now().to_msg()
-            self.initial_pose_pub.publish(message)
+            rt.initial_pose_pub.publish(message)
             time.sleep(0.15)
 
     def localization_health(self, robot="robot_1"):
-        self._require_robot(robot)
+        rt = self._rt(robot)
         with self.data_lock:
-            truth = dict(self.ground_truth) if self.ground_truth else None
-            estimate = dict(self.pose) if self.pose else None
+            truth = dict(rt.ground_truth) if rt.ground_truth else None
+            estimate = dict(rt.pose) if rt.pose else None
         if not truth or not estimate:
             return {
                 "status": "unavailable",
@@ -294,27 +326,30 @@ class Nav2Bridge:
             "observed": time.time(),
         }
 
-    def _wait_localization_near(self, x, y, timeout=6.0):
+    def _wait_localization_near(self, robot, x, y, timeout=6.0):
+        rt = self._rt(robot)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             with self.data_lock:
-                estimate = dict(self.pose) if self.pose else None
+                estimate = dict(rt.pose) if rt.pose else None
             if estimate and math.hypot(estimate["x"] - x, estimate["y"] - y) < 0.3:
                 return estimate
             time.sleep(0.1)
         raise RuntimeError("AMCL 未接受经过审核的重定位位姿")
 
-    def _scan(self, message):
+    def _scan(self, robot, message):
+        rt = self._rt(robot)
         now = time.time()
         with self.data_lock:
-            self.scan_raw_times.append(now)
-            forwarding = self.scan_forwarding
+            rt.scan_raw_times.append(now)
+            forwarding = rt.scan_forwarding
             if forwarding:
-                self.scan_forwarded_times.append(now)
+                rt.scan_forwarded_times.append(now)
         if forwarding:
-            self.scan_pub.publish(message)
+            rt.scan_pub.publish(message)
 
-    def _pose(self, message):
+    def _pose(self, robot, message):
+        rt = self._rt(robot)
         p = message.pose.pose
         # yaw is enough for the 2-D dashboard; avoid adding a tf dependency.
         z, w = p.orientation.z, p.orientation.w
@@ -327,15 +362,17 @@ class Nav2Bridge:
             "observed": time.time(),
         }
         with self.data_lock:
-            self.pose = current
+            rt.pose = current
 
-    def _odom(self, message):
+    def _odom(self, robot, message):
         """Convert simulator odometry into map coordinates for independent QA."""
+        rt = self._rt(robot)
+        start_x, start_y, _ = START_POSES[robot]
         p = message.pose.pose
         z, w = p.orientation.z, p.orientation.w
         current = {
-            "x": p.position.x + START_X,
-            "y": p.position.y + START_Y,
+            "x": p.position.x + start_x,
+            "y": p.position.y + start_y,
             "theta": 2.0 * math.atan2(z, w),
             "speed": math.hypot(
                 message.twist.twist.linear.x, message.twist.twist.linear.y
@@ -344,16 +381,16 @@ class Nav2Bridge:
             "source": "gazebo_odometry",
         }
         with self.data_lock:
-            self.ground_truth = current
+            rt.ground_truth = current
             if (
-                not self.trace
+                not rt.trace
                 or math.hypot(
-                    current["x"] - self.trace[-1][0],
-                    current["y"] - self.trace[-1][1],
+                    current["x"] - rt.trace[-1][0],
+                    current["y"] - rt.trace[-1][1],
                 )
                 > 0.04
             ):
-                self.trace.append([current["x"], current["y"]])
+                rt.trace.append([current["x"], current["y"]])
 
     @staticmethod
     def _rate(samples, window=2.0):
@@ -372,38 +409,40 @@ class Nav2Bridge:
         return future.result()
 
     def topic_health(self, robot="robot_1"):
-        self._require_robot(robot)
+        rt = self._rt(robot)
         with self.data_lock:
             return {
-                "raw_scan_hz": self._rate(tuple(self.scan_raw_times)),
-                "nav2_scan_hz": self._rate(tuple(self.scan_forwarded_times)),
-                "scan_forwarding": self.scan_forwarding,
+                "raw_scan_hz": self._rate(tuple(rt.scan_raw_times)),
+                "nav2_scan_hz": self._rate(tuple(rt.scan_forwarded_times)),
+                "scan_forwarding": rt.scan_forwarding,
                 "observed": time.time(),
             }
 
     def navigator_state(self, robot="robot_1"):
-        self._require_robot(robot)
-        if not self.lifecycle_client.wait_for_service(timeout_sec=2):
-            return {"node": "/bt_navigator", "id": 0, "label": "unavailable"}
-        response = self._wait(self.lifecycle_client.call_async(GetState.Request()), 3)
+        rt = self._rt(robot)
+        node_name = f"/{robot}/bt_navigator"
+        if not rt.lifecycle_client.wait_for_service(timeout_sec=2):
+            return {"node": node_name, "id": 0, "label": "unavailable"}
+        response = self._wait(rt.lifecycle_client.call_async(GetState.Request()), 3)
         return {
-            "node": "/bt_navigator",
+            "node": node_name,
             "id": int(response.current_state.id),
             "label": response.current_state.label,
         }
 
     def controller_config(self, robot="robot_1"):
-        self._require_robot(robot)
-        if not self.controller_get_client.wait_for_service(timeout_sec=2):
+        rt = self._rt(robot)
+        if not rt.controller_get_client.wait_for_service(timeout_sec=2):
             return {"vx_max": None, "vx_min": None}
         request = GetParameters.Request()
         request.names = ["FollowPath.vx_max", "FollowPath.vx_min"]
-        response = self._wait(self.controller_get_client.call_async(request), 3)
+        response = self._wait(rt.controller_get_client.call_async(request), 3)
         values = [value.double_value for value in response.values]
         return {"vx_max": values[0], "vx_min": values[1]}
 
-    def _set_controller_config(self, vx_max, vx_min):
-        if not self.controller_set_client.wait_for_service(timeout_sec=2):
+    def _set_controller_config(self, robot, vx_max, vx_min):
+        rt = self._rt(robot)
+        if not rt.controller_set_client.wait_for_service(timeout_sec=2):
             raise RuntimeError("controller_server 参数服务不可用")
         request = SetParameters.Request()
         request.parameters = [
@@ -418,56 +457,62 @@ class Nav2Bridge:
                 ("FollowPath.vx_min", vx_min),
             ]
         ]
-        response = self._wait(self.controller_set_client.call_async(request), 4)
+        response = self._wait(rt.controller_set_client.call_async(request), 4)
         if len(response.results) != 2 or not all(result.successful for result in response.results):
             reasons = [result.reason for result in response.results]
             raise RuntimeError("controller_server 拒绝参数变更：" + "; ".join(reasons))
-        return self.controller_config()
+        return self.controller_config(robot)
 
-    def _change_navigator(self, transition_id, expected):
-        if not self.lifecycle_change_client.wait_for_service(timeout_sec=2):
+    def _change_navigator(self, robot, transition_id, expected):
+        rt = self._rt(robot)
+        if not rt.lifecycle_change_client.wait_for_service(timeout_sec=2):
             raise RuntimeError("bt_navigator lifecycle 服务不可用")
         request = ChangeState.Request()
         request.transition = Transition(id=transition_id)
-        response = self._wait(self.lifecycle_change_client.call_async(request), 5)
+        response = self._wait(rt.lifecycle_change_client.call_async(request), 5)
         if not response.success:
             raise RuntimeError("bt_navigator lifecycle 状态变更被拒绝")
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
-            state = self.navigator_state()
+            state = self.navigator_state(robot)
             if state["label"] == expected:
                 return state
             time.sleep(0.1)
         raise RuntimeError(f"bt_navigator 未进入 {expected} 状态")
 
-    def _manage_nav2(self, command, expected):
-        if not self.lifecycle_manager_client.wait_for_service(timeout_sec=3):
+    def _manage_nav2(self, robot, command, expected):
+        rt = self._rt(robot)
+        if not rt.lifecycle_manager_client.wait_for_service(timeout_sec=3):
             raise RuntimeError("Nav2 lifecycle manager 服务不可用")
         request = self.ManageLifecycleNodes.Request()
         request.command = command
-        response = self._wait(self.lifecycle_manager_client.call_async(request), 20)
+        response = self._wait(rt.lifecycle_manager_client.call_async(request), 20)
         if not response.success:
             raise RuntimeError("Nav2 lifecycle manager 拒绝状态变更")
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
-            state = self.navigator_state()
+            state = self.navigator_state(robot)
             if state["label"] == expected:
                 return state
             time.sleep(0.1)
         raise RuntimeError(f"Nav2 lifecycle manager 未使 bt_navigator 进入 {expected}")
 
     def snapshot(self, robot="robot_1"):
-        self._require_robot(robot)
+        rt = self._rt(robot)
         nodes = [
             (namespace.rstrip("/") + "/" + name) or "/" + name
             for name, namespace in self.node.get_node_names_and_namespaces()
+        ]
+        nodes = [
+            name for name in nodes
+            if name.startswith(f"/{robot}/") or name == "/robot_debug_nav2_bridge"
         ]
         return {
             "robot_id": robot,
             "nodes": sorted(set(nodes)),
             "topics": self.topic_health(robot),
-            "pose": dict(self.ground_truth or self.pose or {}),
-            "localization_pose": dict(self.pose) if self.pose else None,
+            "pose": dict(rt.ground_truth or rt.pose or {}),
+            "localization_pose": dict(rt.pose) if rt.pose else None,
             "localization_health": self.localization_health(robot),
             "nav2_lifecycle": {"bt_navigator": self.navigator_state(robot)},
             "observed": time.time(),
@@ -476,7 +521,7 @@ class Nav2Bridge:
     def parameters(self, robot="robot_1"):
         self._require_robot(robot)
         return {
-            "scan_input": "/scan_faulted",
+            "scan_input": f"/{robot}/scan_faulted",
             "fault_boundary": "laser_forwarder",
             "controller": self.controller_config(robot),
             "nav2_lifecycle": {"bt_navigator": self.navigator_state(robot)},
@@ -484,12 +529,12 @@ class Nav2Bridge:
         }
 
     def sample(self, robot="robot_1"):
-        self._require_robot(robot)
+        rt = self._rt(robot)
         with self.data_lock:
-            before = dict(self.ground_truth or self.pose or {})
+            before = dict(rt.ground_truth or rt.pose or {})
         time.sleep(0.7)
         with self.data_lock:
-            after = dict(self.ground_truth or self.pose or {})
+            after = dict(rt.ground_truth or rt.pose or {})
         return {
             "before": before,
             "after": after,
@@ -500,25 +545,27 @@ class Nav2Bridge:
         }
 
     def inject(self, robot, fault):
-        self._require_robot(robot)
+        rt = self._rt(robot)
         if fault == "scan_interrupted":
             with self.data_lock:
-                self.scan_forwarding = False
-                self.scan_forwarded_times.clear()
+                rt.scan_forwarding = False
+                rt.scan_forwarded_times.clear()
         elif fault == "navigator_inactive":
             self.stop(robot)
             state = self.navigator_state(robot)
             if state["label"] == "active":
-                self._manage_nav2(self.ManageLifecycleNodes.Request.PAUSE, "inactive")
+                self._manage_nav2(
+                    robot, self.ManageLifecycleNodes.Request.PAUSE, "inactive"
+                )
         elif fault == "controller_velocity_zero":
             current = self.controller_config(robot)
             if current["vx_max"] is None:
                 raise RuntimeError("无法读取 controller_server 参数")
-            self.controller_defaults = current
-            self._set_controller_config(0.0, 0.0)
+            rt.controller_defaults = current
+            self._set_controller_config(robot, 0.0, 0.0)
         elif fault == "localization_drift":
             with self.data_lock:
-                truth = dict(self.ground_truth) if self.ground_truth else None
+                truth = dict(rt.ground_truth) if rt.ground_truth else None
             if not truth:
                 raise RuntimeError("Gazebo 真值尚未就绪，无法注入定位漂移")
             injected = {
@@ -527,9 +574,9 @@ class Nav2Bridge:
                 "theta": truth.get("theta", 0.0),
             }
             self._publish_initial_pose(
-                injected["x"], injected["y"], injected["theta"]
+                robot, injected["x"], injected["y"], injected["theta"]
             )
-            self._wait_localization_near(injected["x"], injected["y"])
+            self._wait_localization_near(robot, injected["x"], injected["y"])
         else:
             raise ValueError("不支持的 Nav2 故障类型")
         return {"applied": fault, "robot_id": robot}
@@ -541,7 +588,7 @@ class Nav2Bridge:
         intentionally absent from snapshot()/parameters(), so diagnostic
         agents can only observe the ROS/Nav2 state produced when it fires.
         """
-        self._require_robot(robot)
+        rt = self._rt(robot)
         if fault not in {
             "scan_interrupted", "navigator_inactive", "controller_velocity_zero",
             "localization_drift",
@@ -550,8 +597,8 @@ class Nav2Bridge:
         if not isinstance(navigation_attempt, int) or not 1 <= navigation_attempt <= 8:
             raise ValueError("导航触发序号必须在 1 到 8 之间")
         with self.data_lock:
-            self.navigation_attempt = 0
-            self.scheduled_fault = {
+            rt.navigation_attempt = 0
+            rt.scheduled_fault = {
                 "kind": fault, "navigation_attempt": navigation_attempt,
             }
         return {
@@ -561,12 +608,13 @@ class Nav2Bridge:
         }
 
     def _fire_scheduled_fault(self, robot):
+        rt = self._rt(robot)
         with self.data_lock:
-            self.navigation_attempt += 1
-            schedule = self.scheduled_fault
-            if not schedule or self.navigation_attempt != schedule["navigation_attempt"]:
+            rt.navigation_attempt += 1
+            schedule = rt.scheduled_fault
+            if not schedule or rt.navigation_attempt != schedule["navigation_attempt"]:
                 return
-            self.scheduled_fault = None
+            rt.scheduled_fault = None
             fault = schedule["kind"]
         self.inject(robot, fault)
 
@@ -601,26 +649,34 @@ class Nav2Bridge:
 
     def reset(self, robot):
         self._require_robot(robot)
-        self.stop(robot)
+        for rid in self.robot_ids:
+            self.stop(rid)
         self._stop_sim()
         with self.data_lock:
-            self.scan_forwarding = True
-            self.scan_raw_times.clear()
-            self.scan_forwarded_times.clear()
-            self.trace.clear()
-            self.pose = None
-            self.ground_truth = None
-            self.navigation_attempt = 0
-            self.scheduled_fault = None
+            for runtime in self.robots.values():
+                runtime.scan_forwarding = True
+                runtime.scan_raw_times.clear()
+                runtime.scan_forwarded_times.clear()
+                runtime.trace.clear()
+                runtime.pose = None
+                runtime.ground_truth = None
+                runtime.navigation_attempt = 0
+                runtime.scheduled_fault = None
         self._start_sim()
         self.scenario = None
-        self.controller_defaults = self.controller_config()
-        return {"reset": robot, "note": "Gazebo 世界和 Nav2 已恢复到初始位置"}
+        for rid in self.robot_ids:
+            self.robots[rid].controller_defaults = self.controller_config(rid)
+        return {
+            "reset": "fleet",
+            "requested_by": robot,
+            "robots": list(self.robot_ids),
+            "note": "共享Gazebo世界和两套Nav2已恢复到各自初始位置",
+        }
 
     def plan_path(self, robot, x, y, timeout=6.0):
         """Ask Nav2's actual planner whether a reviewed pose has a path."""
-        self._require_robot(robot)
-        if not self.path_client.wait_for_server(timeout_sec=3):
+        rt = self._rt(robot)
+        if not rt.path_client.wait_for_server(timeout_sec=3):
             return {
                 "reachable": False, "target": [x, y],
                 "reason": "compute_path_action_unavailable",
@@ -634,7 +690,7 @@ class Nav2Bridge:
         goal.planner_id = "GridBased"
         goal.use_start = False
         try:
-            handle = self._wait(self.path_client.send_goal_async(goal), 3)
+            handle = self._wait(rt.path_client.send_goal_async(goal), 3)
             if not handle.accepted:
                 return {
                     "reachable": False, "target": [x, y], "reason": "goal_rejected"
@@ -663,7 +719,7 @@ class Nav2Bridge:
             }
 
     def navigate(self, robot, x=0.5, y=0.5, timeout=25.0, cancel=None):
-        self._require_robot(robot)
+        rt = self._rt(robot)
         self._fire_scheduled_fault(robot)
         start = time.monotonic()
         goal = self.NavigateToPose.Goal()
@@ -673,12 +729,12 @@ class Nav2Bridge:
         goal.pose.pose.position.y = float(y)
         goal.pose.pose.orientation.w = 1.0
         try:
-            handle = self._wait(self.client.send_goal_async(goal), 5)
+            handle = self._wait(rt.client.send_goal_async(goal), 5)
         except (TimeoutError, RuntimeError):
             return self.verdict(robot, x, y, start, "navigate_action_unavailable")
         if not handle.accepted:
             return self.verdict(robot, x, y, start, "goal_rejected")
-        self.active_goal = handle
+        rt.active_goal = handle
         result_future = handle.get_result_async()
         try:
             deadline = time.monotonic() + timeout
@@ -694,12 +750,12 @@ class Nav2Bridge:
             message = getattr(wrapped.result, "error_msg", "") or str(wrapped.status)
             return self.verdict(robot, x, y, start, message)
         finally:
-            self.active_goal = None
+            rt.active_goal = None
 
     def verdict(self, robot, x, y, start, message):
-        self._require_robot(robot)
+        rt = self._rt(robot)
         with self.data_lock:
-            pose = dict(self.ground_truth or self.pose or {})
+            pose = dict(rt.ground_truth or rt.pose or {})
         error = math.hypot(pose.get("x", 100) - x, pose.get("y", 100) - y)
         fresh = time.time() - pose.get("observed", 0) < 2
         return {
@@ -712,10 +768,10 @@ class Nav2Bridge:
         }
 
     def repair(self, robot, cause):
-        self._require_robot(robot)
+        rt = self._rt(robot)
         if cause == "scan_interrupted":
             with self.data_lock:
-                self.scan_forwarding = True
+                rt.scan_forwarding = True
             deadline = time.monotonic() + 3
             while time.monotonic() < deadline:
                 health = self.topic_health(robot)
@@ -726,25 +782,27 @@ class Nav2Bridge:
         if cause == "navigator_inactive":
             state = self.navigator_state(robot)
             if state["label"] == "inactive":
-                state = self._manage_nav2(self.ManageLifecycleNodes.Request.RESUME, "active")
-            if not self.client.wait_for_server(timeout_sec=3):
+                state = self._manage_nav2(
+                    robot, self.ManageLifecycleNodes.Request.RESUME, "active"
+                )
+            if not rt.client.wait_for_server(timeout_sec=3):
                 raise RuntimeError("bt_navigator 已激活，但导航 action 尚未就绪")
             time.sleep(2.0)
             return {"operation": "resume_nav2_lifecycle", "state": state}
         if cause == "controller_velocity_zero":
             config = self._set_controller_config(
-                self.controller_defaults["vx_max"], self.controller_defaults["vx_min"]
+                robot, rt.controller_defaults["vx_max"], rt.controller_defaults["vx_min"]
             )
             return {"operation": "restore_controller_velocity_limits", "controller": config}
         if cause == "localization_drift":
             with self.data_lock:
-                truth = dict(self.ground_truth) if self.ground_truth else None
+                truth = dict(rt.ground_truth) if rt.ground_truth else None
             if not truth:
                 raise RuntimeError("Gazebo 真值不可用，拒绝重定位")
             self._publish_initial_pose(
-                truth["x"], truth["y"], truth.get("theta", 0.0), variance=0.04
+                robot, truth["x"], truth["y"], truth.get("theta", 0.0), variance=0.04
             )
-            self._wait_localization_near(truth["x"], truth["y"])
+            self._wait_localization_near(robot, truth["x"], truth["y"])
             health = self.localization_health(robot)
             if health["status"] != "aligned":
                 raise RuntimeError("AMCL 重定位后仍未与 Gazebo 真值对齐")
@@ -755,8 +813,8 @@ class Nav2Bridge:
         raise ValueError("No allowed repair for this diagnosis")
 
     def stop(self, robot):
-        self._require_robot(robot)
-        handle = self.active_goal
+        rt = self._rt(robot)
+        handle = rt.active_goal
         if handle:
             try:
                 self._wait(handle.cancel_goal_async(), 3)
@@ -764,25 +822,37 @@ class Nav2Bridge:
                 pass
 
     def public(self):
-        with self.data_lock:
-            pose = dict(self.ground_truth or self.pose or {})
-            trace = list(self.trace)
-        return [
-            {
-                "id": "robot_1",
+        result = []
+        for robot in self.robot_ids:
+            rt = self._rt(robot)
+            with self.data_lock:
+                pose = dict(rt.ground_truth or rt.pose or {})
+                trace = list(rt.trace)
+            result.append({
+                "id": robot,
                 "pose": pose,
                 "trace": trace,
-                "controller_alive": self.sim is not None and self.sim.poll() is None,
-                "busy": self.locks["robot_1"].locked(),
-                "scan": self.topic_health(),
-                "localization": self.localization_health(),
+                "controller_alive": (
+                    self.sim is not None
+                    and self.sim.poll() is None
+                    and rt.client.server_is_ready()
+                    and rt.lifecycle_client.service_is_ready()
+                ),
+                "nav2_online": (
+                    rt.client.server_is_ready()
+                    and rt.lifecycle_client.service_is_ready()
+                ),
+                "busy": self.locks[robot].locked(),
+                "scan": self.topic_health(robot),
+                "localization": self.localization_health(robot),
                 "runtime": "nav2_gazebo",
                 "scenario_active": self.scenario is not None,
-            }
-        ]
+            })
+        return result
 
     def close(self):
-        self.stop("robot_1")
+        for robot in self.robot_ids:
+            self.stop(robot)
         self._stop_sim()
         self.executor.shutdown()
         self.node.destroy_node()

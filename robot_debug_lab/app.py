@@ -18,6 +18,7 @@ from .workflow import Workflow
 from .supervisor import Supervisor
 from .mission_replanner import MissionReplanner
 from .agents import ModelError
+from .fleet import FleetSupervisor
 
 
 @asynccontextmanager
@@ -28,13 +29,16 @@ async def lifespan(app):
     app.state.bridge = bridge
     app.state.store = Store()
     app.state.supervisor = Supervisor(
-        app.state.store, robot_state=lambda: bridge.snapshot("robot_1")
+        app.state.store, robot_state=lambda rid: bridge.snapshot(rid)
     )
     app.state.replanner = MissionReplanner(
         app.state.store, bridge, app.state.supervisor.scene
     )
     app.state.workflow = Workflow(
         bridge, app.state.store, replanner=app.state.replanner
+    )
+    app.state.fleet_supervisor = FleetSupervisor(
+        app.state.store, bridge, app.state.supervisor
     )
     app.state.token = secrets.token_urlsafe(32)
     yield
@@ -53,7 +57,7 @@ app = FastAPI(
 
 class Diagnose(BaseModel):
     robots: list[str] = Field(
-        default=["robot_1"], min_length=1, max_length=1
+        default=["robot_1"], min_length=1, max_length=2
     )
     mode: Literal["ai", "rules"] = "ai"
     prompt: str = Field(
@@ -85,10 +89,18 @@ class AssistantRequest(BaseModel):
     parent_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{12}$")
     recovery_mode: Literal["ai", "rules"] = "ai"
     execute: bool = True
+    robot_id: Literal["robot_1", "robot_2"] = "robot_1"
 
 
 class StoredPlanRun(BaseModel):
     recovery_mode: Literal["ai", "rules"] = "ai"
+
+
+class FleetRequest(BaseModel):
+    prompt: str = Field(min_length=1, max_length=2000, pattern=r"\S")
+    auto_repair: bool = True
+    recovery_mode: Literal["ai", "rules"] = "ai"
+    execute: bool = True
 
 
 class Target(BaseModel):
@@ -139,6 +151,24 @@ def exclusive(rid):
         yield
     finally:
         lock.release()
+
+
+@contextmanager
+def exclusive_fleet():
+    """Reserve every robot before mutating the shared Gazebo world."""
+    acquired = []
+    try:
+        for rid in sorted(app.state.bridge.robot_ids):
+            lock = app.state.bridge.locks[rid]
+            if not lock.acquire(False):
+                raise HTTPException(
+                    409, f"{rid} has an active task; shared world was not changed"
+                )
+            acquired.append(lock)
+        yield
+    finally:
+        for lock in reversed(acquired):
+            lock.release()
 
 
 @app.get("/api/state")
@@ -219,7 +249,9 @@ def schedule_fault(rid: str, value: FaultSchedule):
 
 @app.post("/api/robots/{rid}/reset")
 def reset(rid: str):
-    with exclusive(rid):
+    if rid not in app.state.bridge.locks:
+        raise HTTPException(404, "Unknown robot")
+    with exclusive_fleet():
         result = app.state.bridge.reset(rid)
         app.state.supervisor.scene.clear_runtime_poses()
         return result
@@ -227,7 +259,9 @@ def reset(rid: str):
 
 @app.post("/api/robots/{rid}/scenario")
 def scenario(rid: str, value: Scenario):
-    with exclusive(rid):
+    if rid not in app.state.bridge.locks:
+        raise HTTPException(404, "Unknown robot")
+    with exclusive_fleet():
         result = app.state.bridge.set_scenario(rid, value.kind)
         app.state.supervisor.scene.set_runtime_pose(
             "temporary_crate",
@@ -266,7 +300,9 @@ def diagnose(q: Diagnose):
 @app.post("/api/assistant/tasks")
 def assistant_task(q: AssistantRequest):
     try:
-        plan = app.state.supervisor.plan(q.prompt, q.auto_repair, q.parent_id)
+        plan = app.state.supervisor.plan(
+            q.prompt, q.auto_repair, q.parent_id, q.robot_id
+        )
     except ModelError as e:
         raise HTTPException(502, str(e))
     except ValueError as e:
@@ -278,10 +314,30 @@ def assistant_task(q: AssistantRequest):
     return _dispatch_plan(plan, q.recovery_mode)
 
 
+@app.post("/api/fleet/tasks")
+def fleet_task(q: FleetRequest):
+    if AGENT_BACKEND == "direct" and not API_KEY:
+        raise HTTPException(409, "Configure model credentials first")
+    try:
+        plan = app.state.fleet_supervisor.plan(q.prompt, q.auto_repair)
+        if not q.execute:
+            return {"plan": plan, "run_ids": []}
+        runs = app.state.workflow.submit_fleet(plan, q.recovery_mode)
+    except ModelError as error:
+        raise HTTPException(502, str(error)) from None
+    except ValueError as error:
+        raise HTTPException(409, str(error)) from None
+    run_ids = [run["id"] for run in runs]
+    plan.update(status="dispatched", run_ids=run_ids)
+    app.state.store.save_plan(plan)
+    return {"plan": plan, "run_ids": run_ids}
+
+
 def _validate_stored_plan(plan):
     if plan.get("status") not in {"ready", "dispatched"} or not plan.get("steps"):
         raise ValueError("只能执行后端已验证且包含步骤的计划")
     scene = app.state.supervisor.scene
+    robot = plan.get("robot_id", "robot_1")
     for step in plan["steps"]:
         destination = step.get("destination_id")
         if not destination:
@@ -289,10 +345,16 @@ def _validate_stored_plan(plan):
         approach_id = step.get("approach_id")
         if not approach_id:
             raise ValueError("存储计划缺少语义接近点，请重新规划")
-        try:
-            current = scene.get_approach_pose(destination, approach_id)["pose"]
-        except ValueError:
-            raise ValueError("语义场景已变化，请重新规划") from None
+        if destination == "start":
+            from .config import ROBOT_STARTS
+
+            x, y, _ = ROBOT_STARTS[robot]
+            current = {"x": x, "y": y}
+        else:
+            try:
+                current = scene.get_approach_pose(destination, approach_id)["pose"]
+            except ValueError:
+                raise ValueError("语义场景已变化，请重新规划") from None
         if any(
             abs(float(step[axis]) - float(current[axis])) > 1e-6
             for axis in ("x", "y")

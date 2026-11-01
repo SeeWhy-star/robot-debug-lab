@@ -289,6 +289,10 @@ header p {
 .dot.mint {
   background: #62e0c1;
 }
+.dot.amber {
+  background: #e8a45b;
+  box-shadow: 0 0 8px #e8a45b88;
+}
 .dot.purple {
   background: #aeb9ff;
 }

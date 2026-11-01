@@ -1,6 +1,7 @@
 import json
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -102,7 +103,12 @@ def test_free_text_model_retry_does_not_pollute_next_diagnosis_context(tmp_path)
     assert warnings[-1]["data"]["fallback"] is False
 
 
-@pytest.mark.parametrize("value", ["robot_2", "../robot_1", ""])
+def test_both_configured_robot_scopes_are_accepted():
+    assert robot_id("robot_1") == "robot_1"
+    assert robot_id("robot_2") == "robot_2"
+
+
+@pytest.mark.parametrize("value", ["robot_3", "../robot_1", ""])
 def test_invalid_robot_scope_rejected(value):
     with pytest.raises(ValueError):
         robot_id(value)
@@ -276,6 +282,13 @@ def test_nav2_parameter_rewrite_only_changes_exact_scan_inputs():
     assert "scan_faulted_faulted" not in rewritten
 
 
+def test_nav2_parameter_rewrite_disables_shared_amcl_pose_file_writes():
+    from robot_debug_lab.nav2_bridge import rewrite_nav2_params
+
+    rewritten = rewrite_nav2_params("amcl:\n  save_pose_rate: 0.5\n")
+    assert "save_pose_rate: 0.0" in rewritten
+
+
 class FabricatedEvidence:
     def complete(self, messages, tools):
         return {
@@ -306,17 +319,20 @@ def test_independent_verdict_uses_fresh_gazebo_odometry():
 
     bridge = Nav2Bridge.__new__(Nav2Bridge)
     bridge.data_lock = threading.Lock()
-    bridge.pose = None
-    bridge.ground_truth = {
-        "x": 2.0,
-        "y": 0.5,
-        "observed": time.time() - 5,
-        "source": "gazebo_odometry",
-    }
+    runtime = SimpleNamespace(
+        pose=None,
+        ground_truth={
+            "x": 2.0,
+            "y": 0.5,
+            "observed": time.time() - 5,
+            "source": "gazebo_odometry",
+        },
+    )
+    bridge.robots = {"robot_1": runtime}
     assert not bridge.verdict("robot_1", 2.0, 0.5, time.monotonic(), "4")["success"]
-    bridge.ground_truth["observed"] = time.time()
+    runtime.ground_truth["observed"] = time.time()
     assert bridge.verdict("robot_1", 2.0, 0.5, time.monotonic(), "4")["success"]
-    bridge.ground_truth["x"] = 1.0
+    runtime.ground_truth["x"] = 1.0
     assert not bridge.verdict("robot_1", 2.0, 0.5, time.monotonic(), "4")["success"]
 
 
@@ -325,14 +341,17 @@ def test_localization_health_compares_amcl_with_gazebo_truth():
 
     bridge = Nav2Bridge.__new__(Nav2Bridge)
     bridge.data_lock = threading.RLock()
-    bridge.ground_truth = {"x": 1.0, "y": 2.0, "observed": time.time()}
-    bridge.pose = {"x": 1.8, "y": 2.0, "observed": time.time()}
+    runtime = SimpleNamespace(
+        ground_truth={"x": 1.0, "y": 2.0, "observed": time.time()},
+        pose={"x": 1.8, "y": 2.0, "observed": time.time()},
+    )
+    bridge.robots = {"robot_1": runtime}
 
     health = bridge.localization_health("robot_1")
 
     assert health["status"] == "drifted"
     assert health["position_error"] == 0.8
-    bridge.pose["x"] = 1.1
+    runtime.pose["x"] = 1.1
     assert bridge.localization_health("robot_1")["status"] == "aligned"
 
 

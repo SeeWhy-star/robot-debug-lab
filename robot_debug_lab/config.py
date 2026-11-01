@@ -48,7 +48,11 @@ BASE_URL = validate_model_url(
 )
 MODEL = os.environ.get("LLM_MODEL", "deepseek-flash")
 API_KEY = os.environ.get("LLM_API_KEY", "")
-ROBOTS = ("robot_1",)
+ROBOTS = ("robot_1", "robot_2")
+ROBOT_STARTS = {
+    "robot_1": (-2.0, -0.5, 0.0),
+    "robot_2": (-2.0, 0.5, 0.0),
+}
 AGENT_BACKEND = os.environ.get("RDL_AGENT_BACKEND", "direct")
 if AGENT_BACKEND not in {"direct", "openfang"}:
     raise ValueError("RDL_AGENT_BACKEND must be direct or openfang")

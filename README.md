@@ -4,7 +4,7 @@ English | [简体中文](README.zh-CN.md)
 
 An evidence-driven ROS 2 incident investigation lab built on **Gazebo Sim, Nav2 and OpenFang**.
 
-A TurtleBot3 executes a real Nav2 goal in a repository-owned Gazebo warehouse. The walls, five racks, Shelf A, charging pad and crate are simulator entities, while Nav2 consumes a matching occupancy grid and the dashboard overlays live odometry on that same map. The lab can interrupt the guarded laser path between Gazebo's raw `/scan` and Nav2's `/scan_faulted` input. The AI never receives the injected label: it must inspect live ROS nodes, sensor rates, parameters and motion, cite recorded evidence, and request an allowlisted recovery. The original goal is then replayed and independently accepted against Gazebo odometry.
+Two TurtleBot3 robots execute real, namespaced Nav2 goals in one repository-owned Gazebo warehouse. The walls, five racks, Shelf A, charging pad and crate are simulator entities, while both Nav2 stacks consume a matching occupancy grid and the dashboard overlays independent live odometry on that same map. The lab can interrupt either robot's guarded laser path between Gazebo's raw `scan` and Nav2's `scan_faulted` input. The AI never receives the injected label: it must inspect live ROS nodes, sensor rates, parameters and motion, cite recorded evidence, and request an allowlisted recovery. The original goal is then replayed and independently accepted against Gazebo odometry.
 
 ## What the AI actually does
 
@@ -19,6 +19,7 @@ A TurtleBot3 executes a real Nav2 goal in a repository-owned Gazebo warehouse. T
 - Localization incidents are diagnosed from measured AMCL-versus-Gazebo divergence; the simulation-only repair may reseed AMCL from verified Gazebo truth before replaying the original goal.
 - When the stack is healthy but a reviewed semantic approach fails in execution, a separate Agent may select only a Nav2-verified alternative approach while completed and later mission steps remain unchanged.
 - Nav2 remains responsible for planning and control; the model never publishes velocity commands.
+- A separate OpenFang fleet Agent reads both robots' live poses and health plus the semantic registry, then returns one structured mission per selected robot. The gateway reserves the whole batch before starting either mission and enforces the single charging-station capacity.
 
 Local end-to-end acceptance on 2026-10-29 completed the same laser incident in both modes. The rules baseline finished with 0 tokens and 0.1816 m final error. The OpenFang AI run produced 11 recorded events, consumed 12132 provider-reported tokens, and finished with 0.2536 m final error. See the committed [acceptance summary](docs/nav2-acceptance-results.json).
 
@@ -49,6 +50,7 @@ Run the live incident acceptance against a running server:
 .venv/bin/python scripts/acceptance_missions.py --reset
 .venv/bin/python scripts/acceptance_replanning.py
 .venv/bin/python scripts/acceptance_combined_recovery.py --fault navigator_inactive
+.venv/bin/python scripts/acceptance_fleet.py --reset
 .venv/bin/python scripts/evaluate_fault_matrix.py --mode both
 .venv/bin/python scripts/evaluate_mission_faults.py --fault all --mode both --trials 3 --resume
 # Reproduce only the fourth localization mechanism
@@ -60,7 +62,11 @@ Run the live incident acceptance against a running server:
 ```mermaid
 flowchart LR
   UI[React dashboard] --> API[FastAPI gateway]
-  API --> Nav2[Nav2 goal]
+  API --> Fleet[OpenFang fleet planner]
+  Fleet --> Guard0[Atomic batch and resource guard]
+  Guard0 --> R1[Robot 01 Agent + Nav2]
+  Guard0 --> R2[Robot 02 Agent + Nav2]
+  API --> Nav2[Per-robot Nav2 goal]
   Nav2 -->|failure| Agent[OpenFang diagnostic agent]
   Agent --> Tools[Read-only ROS tools]
   Tools --> Guard[Fresh evidence guard]
@@ -85,7 +91,9 @@ A fourth mechanism now corrupts AMCL through the real `/initialpose` interface w
 
 **Phase 1 backend is complete:** zero-token atomic routing, tool-grounded ReAct planning, an authoritative semantic scene, ordered multi-step execution, contextual clarification, capability negotiation, observable simulated charging, cancellation, and independent acceptance are implemented. Evidence-grounded recovery from a blocked semantic approach is also working end to end.
 
-**Phase 2 backend is complete:** four distinct ROS/Nav2 failures, AI-versus-rules comparison, mid-mission recovery, automated evaluation, and combined system-plus-route recovery are implemented. The original three-mechanism matrix passed 18 live runs; localization drift additionally passed direct and ordered-mission AI/rules comparisons. Work stops at the phase boundary for manual acceptance before adding the second robot and per-robot Agents in Phase 3. Costmap-derived candidate generation, general conditional task graphs, restart resumption, and physical manipulation remain later extensions.
+**Phase 2 backend is complete:** four distinct ROS/Nav2 failures, AI-versus-rules comparison, mid-mission recovery, automated evaluation, and combined system-plus-route recovery are implemented. The original three-mechanism matrix passed 18 live runs; localization drift additionally passed direct and ordered-mission AI/rules comparisons. Costmap-derived candidate generation, general conditional task graphs, restart resumption, and physical manipulation remain later extensions.
+
+**Phase 3 is underway:** two physical Gazebo robot entities now run independent namespaced sensor, TF, AMCL and Nav2 stacks in one shared world. An OpenFang fleet Agent queries live fleet state and semantic destinations, proposes distance/health-aware assignments, and the deterministic workflow atomically starts both missions. The first [native-GUI fleet acceptance](docs/fleet-acceptance-results.json) completed both parallel missions with separate Gazebo errors of 0.236 m and 0.037 m. Per-robot scan interruption is isolated: Robot 01's Nav2 input can be 0 Hz while Robot 02 remains at 5 Hz. Deterministic aisle reservations, deadlock handling, automatic reassignment after an unrecovered robot failure, and a fleet evaluation matrix remain the next Phase 3 work.
 
 ## Real Nav2 source case
 

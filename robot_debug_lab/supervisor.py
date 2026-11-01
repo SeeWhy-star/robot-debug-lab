@@ -19,7 +19,7 @@ class NavigationTask(BaseModel):
     """Legacy single-navigation contract used by the diagnosis entry point."""
 
     model_config = ConfigDict(extra="forbid", strict=True)
-    robot_id: Literal["robot_1"]
+    robot_id: Literal["robot_1", "robot_2"]
     x: float = Field(ge=-4.0, le=4.0, allow_inf_nan=False)
     y: float = Field(ge=-4.0, le=4.0, allow_inf_nan=False)
     auto_repair: bool
@@ -261,7 +261,9 @@ class Supervisor:
         self.store = store
         self.model = model
         self.scene = scene or SCENE
-        self.robot_state = robot_state or (lambda: {"robot_id": "robot_1", "available": False})
+        self.robot_state = robot_state or (
+            lambda rid: {"robot_id": rid, "available": False}
+        )
         self.lock = threading.Lock()
 
     def _simple_draft(self, prompt):
@@ -299,7 +301,7 @@ class Supervisor:
         # the scene, recognize multiple actions, and ask a grounded question.
         return None
 
-    def _tool(self, name, args):
+    def _tool(self, name, args, robot):
         if name == "list_scene_objects" and args == {}:
             return self.scene.list_scene_objects()
         if name == "get_object_pose" and set(args) == {"object_id"}:
@@ -307,7 +309,7 @@ class Supervisor:
         if name == "get_safe_approach_pose" and set(args) == {"object_id"}:
             return self.scene.get_safe_approach_pose(args["object_id"])
         if name == "get_robot_state" and args == {}:
-            return self.robot_state()
+            return self.robot_state(robot)
         if name == "list_robot_capabilities" and args == {}:
             return ROBOT_CAPABILITIES
         if name == "resolve_destination" and set(args) == {"name"}:
@@ -323,17 +325,20 @@ class Supervisor:
             return {"results": [self.scene.resolve_destination(item) for item in names]}
         raise ValueError("无效或越权的场景工具调用")
 
-    def _model_draft(self, turns, plan):
+    def _model_draft(self, turns, plan, robot):
         remote = None
         model = self.model
         if model is None:
             if config.AGENT_BACKEND == "openfang":
-                remote = OpenFangModel(None, plan["id"])
+                remote = OpenFangModel(robot, plan["id"])
                 model = remote
             else:
                 model = CompatibleModel()
         messages = [
-            {"role": "system", "content": MISSION_SYSTEM},
+            {
+                "role": "system",
+                "content": MISSION_SYSTEM + f"\nThis mission is assigned to {robot}.",
+            },
             {"role": "user", "content": json.dumps({"conversation": turns}, ensure_ascii=False)},
         ]
         usage = {"prompt_tokens": 0, "completion_tokens": 0}
@@ -443,7 +448,7 @@ class Supervisor:
                         continue
                     seen_tool_calls.add(signature)
                     try:
-                        result = self._tool(name, args)
+                        result = self._tool(name, args, robot)
                         if name == "list_scene_objects":
                             observed_objects.update(item["object_id"] for item in result)
                         elif name == "resolve_destinations":
@@ -470,7 +475,7 @@ class Supervisor:
                     pass
             raise
 
-    def _materialize(self, steps, auto_repair):
+    def _materialize(self, steps, auto_repair, robot):
         materialized = []
         for index, step in enumerate(steps, 1):
             item = step.model_dump()
@@ -478,10 +483,14 @@ class Supervisor:
             if step.action == "return_to_start":
                 item["destination_id"] = "start"
             if item.get("destination_id"):
-                approach = self.scene.get_safe_approach_pose(item["destination_id"])
-                x, y = self.scene.navigation_pose(
-                    item["destination_id"], approach["approach_id"]
-                )
+                if item["destination_id"] == "start":
+                    x, y, _ = config.ROBOT_STARTS[robot]
+                    approach = {"approach_id": f"{robot}_home"}
+                else:
+                    approach = self.scene.get_safe_approach_pose(item["destination_id"])
+                    x, y = self.scene.navigation_pose(
+                        item["destination_id"], approach["approach_id"]
+                    )
                 item.update(
                     x=x,
                     y=y,
@@ -491,12 +500,14 @@ class Supervisor:
             materialized.append(item)
         return materialized
 
-    def plan(self, prompt, auto_repair, parent_id=None):
+    def plan(self, prompt, auto_repair, parent_id=None, robot="robot_1"):
+        robot = config.robot_id(robot)
         if not self.lock.acquire(False):
             raise ValueError("Assistant 正在解析另一条指令，请稍后再试")
         plan = {
             "id": uuid.uuid4().hex[:12], "prompt": prompt, "created": time.time(),
             "backend": "deterministic", "status": "planning", "steps": [], "run_ids": [],
+            "robot_id": robot,
         }
         remote = None
         parent = None
@@ -510,6 +521,8 @@ class Supervisor:
                 if len(turns) >= 10:
                     raise ValueError("已达到五轮补充上限，请新建完整指令")
                 auto_repair = auto_repair and parent.get("auto_repair_ceiling", False)
+                robot = parent.get("robot_id", robot)
+                plan["robot_id"] = robot
                 plan["parent_id"] = parent_id
             turns.append({"role": "user", "content": prompt})
             if sum(len(turn["content"]) for turn in turns) > 10000:
@@ -525,11 +538,11 @@ class Supervisor:
             draft = None if parent else self._simple_draft(prompt)
             if draft is None:
                 plan["backend"] = config.AGENT_BACKEND
-                draft, usage, remote = self._model_draft(turns, plan)
+                draft, usage, remote = self._model_draft(turns, plan, robot)
                 plan["usage"] = usage
             else:
                 plan["usage"] = {"prompt_tokens": 0, "completion_tokens": 0}
-            plan["steps"] = self._materialize(draft.steps, auto_repair)
+            plan["steps"] = self._materialize(draft.steps, auto_repair, robot)
             plan["message"] = draft.message
             plan["status"] = "ready" if plan["steps"] else "needs_clarification"
             plan["turns"].append({"role": "assistant", "content": plan["message"]})

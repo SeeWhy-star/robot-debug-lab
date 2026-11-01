@@ -71,6 +71,13 @@ type AssistantPlan = {
   prompt?: string;
   auto_repair_ceiling?: boolean;
   turns?: { role: string; content: string }[];
+  robot_id?: string;
+  plan_type?: string;
+  assignments?: {
+    robot_id: string;
+    rationale: string;
+    steps: MissionStep[];
+  }[];
 };
 type State = {
   plans?: AssistantPlan[];
@@ -227,6 +234,7 @@ function App() {
     [busy, setBusy] = useState(false),
     [instruction, setInstruction] = useState(() => localStorage.getItem("rdl.plan") ? "" : "让机器人去货架 A"),
     [missionRepair, setMissionRepair] = useState(true),
+    [missionScope, setMissionScope] = useState<"single" | "fleet">("single"),
     [planning, setPlanning] = useState(false),
     [planId, setPlanId] = useState(() => localStorage.getItem("rdl.plan") || ""),
     [returnedPlan, setReturnedPlan] = useState<AssistantPlan | null>(null),
@@ -297,10 +305,15 @@ function App() {
   async function executeInstruction() {
     setPlanning(true);
     try {
-      const d = await post("/api/assistant/tasks", {
-        prompt: instruction, auto_repair: missionRepair,
-        parent_id: clarifying ? assistantPlan.id : null,
-      });
+      const d = missionScope === "fleet"
+        ? await post("/api/fleet/tasks", {
+            prompt: instruction, auto_repair: missionRepair,
+          })
+        : await post("/api/assistant/tasks", {
+            prompt: instruction, auto_repair: missionRepair,
+            parent_id: clarifying ? assistantPlan.id : null,
+            robot_id: clarifying ? assistantPlan.robot_id : robot,
+          });
       if (d) {
         setPlanId(d.plan.id);
         localStorage.setItem("rdl.plan", d.plan.id);
@@ -410,18 +423,26 @@ function App() {
             <button disabled={busy} onClick={() => newInstruction("让机器人去货架 A")}>导航示例</button>
             <button disabled={busy} onClick={() => newInstruction()}>新建指令</button>
           </div>
+          <label>任务范围</label>
+          <div className="segmented">
+            <button className={missionScope === "single" ? "chosen" : ""}
+              disabled={clarifying} onClick={() => setMissionScope("single")}>所选机器人</button>
+            <button className={missionScope === "fleet" ? "chosen" : ""}
+              disabled={clarifying} onClick={() => setMissionScope("fleet")}>车队协同 Agent</button>
+          </div>
+          <p className="hint">车队模式会查询两台机器人的实时位置和健康状态，再生成可审核的并行子任务。</p>
           <label htmlFor="plan-history">指令历史（选择后只查看，不会再次执行）</label>
           <select id="plan-history" value={planId} disabled={busy} onChange={(e) => choosePlan(e.target.value)}>
             <option value="">新指令</option>
             {(data?.plans || []).map((p) => <option value={p.id} key={p.id}>
-              {p.status === "needs_clarification" ? "待补充" : p.status === "dispatched" ? "已分派" : p.status === "continued" ? "已续接" : "未执行"} · {(p.prompt || p.message || p.id).slice(0, 50)}
+              {p.status === "needs_clarification" ? "待补充" : p.status === "dispatched" ? "已分派" : p.status === "continued" ? "已续接" : "未执行"} · {p.robot_id?.replace("robot_", "R0") || "R01"} · {(p.prompt || p.message || p.id).slice(0, 50)}
             </option>)}
           </select>
           {clarifying && <p className="hint clarification-question">{assistantPlan.message}</p>}
           <label htmlFor="instruction">{clarifying ? "补充信息（保留上文的机器人与要求）" : "告诉机器人去哪里"}</label>
           <textarea id="instruction" value={instruction} maxLength={2000}
             onChange={(e) => setInstruction(e.target.value)}
-            placeholder="例如：让机器人去货架 A" />
+            placeholder={missionScope === "fleet" ? "例如：让离货架 A 最近的机器人去检查，另一台去充电站等待" : "例如：让机器人去货架 A"} />
           <label className="checkbox">
             <input type="checkbox" checked={missionRepair && !(clarifying && assistantPlan.auto_repair_ceiling === false)}
               disabled={clarifying && assistantPlan.auto_repair_ceiling === false}
@@ -434,7 +455,7 @@ function App() {
           </button>
           <p className="hint">新指令只有点击上方按钮才会执行；历史下拉框只展示过去的计划。导航失败后，AI 会调查真实 ROS 状态。</p>
           {assistantPlan && <div className="assistant-result" role="status">
-            <b>{assistantPlan.run_ids.length ? "已分派任务" : clarifying ? "请补充指令" : assistantPlan.status === "continued" ? "已由后续补充指令接续" : "计划未执行"}</b>
+            <b>{assistantPlan.run_ids.length ? "已分派任务" : clarifying ? "请补充指令" : assistantPlan.status === "continued" ? "已由后续补充指令接续" : "计划未执行"} · {assistantPlan.robot_id?.replace("robot_", "Robot 0") || "Robot 01"}</b>
             <p>{assistantPlan.message}</p>
             {!!assistantPlan.turns?.length && <details><summary>查看指令对话</summary>
               {assistantPlan.turns.map((t, i) => <p key={i}><b>{t.role === "user" ? "你" : "Assistant"}：</b>{t.content}</p>)}
@@ -447,6 +468,13 @@ function App() {
                 document.getElementById("investigation")?.scrollIntoView({ behavior: "smooth" });
               }}>查看执行结果</button>}
             </p>)}
+            {(assistantPlan.assignments || []).map((assignment) => <div key={assignment.robot_id}>
+              <p><b>{assignment.robot_id.replace("robot_", "Robot 0")}</b> · {assignment.rationale}</p>
+              {assignment.steps.map((step) => <p key={`${assignment.robot_id}-${step.id}`}>
+                {step.id} · {step.description}
+                {step.x !== undefined && step.y !== undefined ? ` → (${step.x}, ${step.y})` : ""}
+              </p>)}
+            </div>)}
             <small>规划后端：{(assistantPlan.usage?.prompt_tokens || 0) + (assistantPlan.usage?.completion_tokens || 0) === 0 ? "确定性解析（未调用模型）" : "模型结构化规划"} · tokens：{(assistantPlan.usage?.prompt_tokens || 0) + (assistantPlan.usage?.completion_tokens || 0)}</small>
           </div>}
         </section>
@@ -460,13 +488,13 @@ function App() {
             </div>
             <Scene robots={data?.robots || []} activeTargets={data?.active_targets || {}} />
             <div className="legend">
-              <span>
-                <i className="dot mint" /> Robot 01
-              </span>
+              {(data?.robots || []).map((item, index) => <span key={item.id}>
+                <i className={"dot " + (index ? "amber" : "mint")} /> {item.id.replace("robot_", "Robot 0")}
+              </span>)}
               <small>
                 Gazebo 里程计轨迹 · 虚线圈仅表示当前执行目标，历史目标不显示
-                {data?.robots[0]?.localization?.position_error != null
-                  ? ` · AMCL/Gazebo 偏差 ${data.robots[0].localization.position_error.toFixed(2)} m`
+                {chosen?.localization?.position_error != null
+                  ? ` · 当前所选机器人 AMCL/Gazebo 偏差 ${chosen.localization.position_error.toFixed(2)} m`
                   : ""}
               </small>
             </div>
@@ -502,7 +530,7 @@ function App() {
                 disabled={disabled}
                 onClick={async () => {
                   if (await post(`/api/robots/${robot}/reset`))
-                    setNotice("已恢复默认配置与起点。");
+                    setNotice("共享Gazebo世界已重置，两台机器人均恢复到各自起点。");
                 }}
               >
                 重置
