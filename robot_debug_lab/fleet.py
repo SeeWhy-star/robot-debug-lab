@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 import json
+import re
 import threading
 import time
 import uuid
@@ -13,6 +14,19 @@ from . import config
 from .agents import CompatibleModel, ModelError
 from .openfang import OpenFangModel
 from .supervisor import MissionStep
+
+
+_NUMBER = r"-?(?:\d+(?:\.\d+)?|\.\d+)"
+_COORDINATE_PAIR = re.compile(
+    rf"[（(]\s*({_NUMBER})\s*[,，]\s*({_NUMBER})\s*[）)]"
+)
+
+
+def explicit_coordinates(text):
+    return {
+        (float(match.group(1)), float(match.group(2)))
+        for match in _COORDINATE_PAIR.finditer(text)
+    }
 
 
 class FleetAssignment(BaseModel):
@@ -131,7 +145,7 @@ FLEET_TOOLS = [
 
 
 FLEET_SYSTEM = """You are a fleet task planner for exactly two robots in one Nav2 + Gazebo
-warehouse. First call get_fleet_state and resolve_destinations for every named place, then call
+warehouse. First call get_fleet_state. Call resolve_destinations for every named place, then call
 finish_fleet_plan. Assign work using live availability, health and distance; explain the assignment
 in concise Chinese. Preserve explicit robot assignments from the user. Use distinct robot_id values.
 Ground named destinations only with returned object_id values and never invent coordinates. Available
@@ -212,6 +226,7 @@ class FleetSupervisor:
             "handoffs": [],
         }
         remote = None
+        user_coordinates = explicit_coordinates(prompt)
         try:
             self.store.save_plan(plan)
             model = self.model
@@ -247,8 +262,8 @@ class FleetSupervisor:
                     except (TypeError, ValueError):
                         raise ModelError("车队Agent返回了无效工具参数") from None
                     if name == "finish_fleet_plan":
-                        if not fleet_observed or not observed_objects:
-                            raise ModelError("车队计划缺少实时车队状态或语义场景证据")
+                        if not fleet_observed:
+                            raise ModelError("车队计划缺少实时车队状态证据")
                         try:
                             draft = FleetDraft.model_validate(args)
                         except ValidationError as error:
@@ -275,6 +290,12 @@ class FleetSupervisor:
                             for step in assignment.steps:
                                 if step.destination_id and step.destination_id not in observed_objects:
                                     raise ModelError("车队计划引用了未经语义工具查询的地点")
+                                if (
+                                    step.action == "navigate"
+                                    and step.destination_id is None
+                                    and (step.x, step.y) not in user_coordinates
+                                ):
+                                    raise ModelError("车队计划引用了用户未明确提供的坐标")
                         plan.update(
                             status="ready",
                             message=draft.message,

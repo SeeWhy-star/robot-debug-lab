@@ -3,6 +3,7 @@ from copy import deepcopy
 from .agents import RobotAgent, Canceled, infer
 from .config import robot_id, ROBOTS, AGENT_BACKEND
 from .supervisor import NavigationTask
+from .traffic import FleetTrafficCoordinator
 
 
 class Workflow:
@@ -14,6 +15,7 @@ class Workflow:
         self.agents = {rid: RobotAgent(bridge, store, robot=rid) for rid in robot_ids}
         self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=max(2, len(robot_ids)))
         self.fleet_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        self.traffic = FleetTrafficCoordinator()
         self.cancel_events = {}
         self.dispatch_lock = threading.Lock()
         self.closed = False
@@ -355,12 +357,69 @@ class Workflow:
                 deepcopy(record),
             )
 
+    def _navigate_with_traffic(self, r, step, cancel, phase):
+        """Reserve a real Nav2 route before a shared-world fleet movement."""
+        rid = r["robot_id"]
+        target = [step["x"], step["y"]]
+        if not r.get("fleet_plan_id"):
+            return self.bridge.navigate(rid, *target, cancel=cancel)
+
+        route = {
+            "reachable": False,
+            "target": target,
+            "reason": "path_geometry_unavailable",
+        }
+        if hasattr(self.bridge, "plan_path"):
+            try:
+                route = self.bridge.plan_path(
+                    rid, *target, include_path=True
+                )
+            except Exception as error:
+                route["reason"] = f"path_preview_failed:{type(error).__name__}"
+        points = route.get("path") if route.get("reachable") else None
+        path_evidence = {
+            key: value for key, value in route.items() if key != "path"
+        }
+        path_evidence["sampled_path_points"] = len(points or [])
+        self.store.event(
+            r,
+            "traffic_path",
+            f"{step['id']} 获取Nav2路线用于车队冲突检查",
+            path_evidence,
+        )
+        r["status"] = "traffic_waiting"
+        self.store.save(r)
+        reservation = self.traffic.acquire(
+            rid, r["id"], step["id"], points, cancel
+        )
+        if reservation is None:
+            raise Canceled()
+        reservation["phase"] = phase
+        step.setdefault("traffic_reservations", []).append(deepcopy(reservation))
+        kind = "traffic_waited" if reservation["blocked_by"] else "traffic_reserved"
+        title = (
+            f"{step['id']} 等待冲突路线释放后取得通行权"
+            if reservation["blocked_by"]
+            else f"{step['id']} 取得路线通行权"
+        )
+        self.store.event(r, kind, title, reservation)
+        r["status"] = "navigating"
+        self.store.save(r)
+        try:
+            return self.bridge.navigate(rid, *target, cancel=cancel)
+        finally:
+            self.traffic.release(reservation["token"])
+            self.store.event(r, "traffic_released", f"{step['id']} 释放路线通行权", {
+                "token": reservation["token"],
+                "phase": phase,
+            })
+
     def _mission_navigation(self, r, step, cancel, phase="initial"):
         rid = r["robot_id"]
         target = [step["x"], step["y"]]
         r.update(status="navigating", active_target=target, target=target)
         self.store.save(r)
-        baseline = self.bridge.navigate(rid, *target, cancel=cancel)
+        baseline = self._navigate_with_traffic(r, step, cancel, phase)
         step.setdefault("attempts", []).append({
             "target": target, "approach_id": step.get("approach_id"),
             "phase": phase, "result": baseline,
@@ -428,7 +487,9 @@ class Workflow:
             raise Canceled()
         r["status"] = "validating"
         self.store.save(r)
-        validation = self.bridge.navigate(rid, *target, cancel=cancel)
+        validation = self._navigate_with_traffic(
+            r, step, cancel, "post_repair_replay"
+        )
         step.setdefault("attempts", []).append({
             "target": target, "approach_id": step.get("approach_id"),
             "phase": "post_repair_replay", "result": validation,

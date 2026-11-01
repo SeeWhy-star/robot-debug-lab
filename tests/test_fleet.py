@@ -55,6 +55,35 @@ class OneRobotFails(FleetBridge):
         return super().navigate(robot, x, y, cancel)
 
 
+class ConflictingFleetBridge(FleetBridge):
+    def __init__(self):
+        super().__init__()
+        self.motion_lock = threading.Lock()
+        self.active_motion = 0
+        self.max_active_motion = 0
+
+    def plan_path(self, robot, x, y, include_path=False):
+        return {
+            "reachable": True,
+            "target": [x, y],
+            "path_length": 2.0,
+            "pose_count": 10,
+            "reason": "path_found",
+            "path": [[-1.0, 0.0], [1.0, 0.0]],
+        }
+
+    def navigate(self, robot, x, y, cancel=None):
+        with self.motion_lock:
+            self.active_motion += 1
+            self.max_active_motion = max(self.max_active_motion, self.active_motion)
+        time.sleep(0.08)
+        try:
+            return super().navigate(robot, x, y, cancel)
+        finally:
+            with self.motion_lock:
+                self.active_motion -= 1
+
+
 class FleetModel:
     def __init__(self, assignments=None):
         self.round = 0
@@ -109,6 +138,43 @@ class FleetModel:
         }, {"prompt_tokens": 30, "completion_tokens": 10}
 
 
+class CoordinateFleetModel(FleetModel):
+    def complete(self, messages, tools):
+        self.round += 1
+        if self.round == 1:
+            return {
+                "role": "assistant",
+                "tool_calls": [self.call("get_fleet_state", {}, "fleet")],
+            }, {"prompt_tokens": 10, "completion_tokens": 3}
+        assignments = [
+            {
+                "robot_id": "robot_1",
+                "steps": [{
+                    "action": "navigate", "destination_id": None,
+                    "x": 2.0, "y": 0.5, "duration_seconds": None,
+                    "description": "前往明确坐标",
+                }],
+                "rationale": "用户明确指定Robot 01",
+            },
+            {
+                "robot_id": "robot_2",
+                "steps": [{
+                    "action": "navigate", "destination_id": None,
+                    "x": 2.0, "y": -0.5, "duration_seconds": None,
+                    "description": "前往明确坐标",
+                }],
+                "rationale": "用户明确指定Robot 02",
+            },
+        ]
+        return {
+            "role": "assistant",
+            "tool_calls": [self.call("finish_fleet_plan", {
+                "assignments": assignments,
+                "message": "保留明确坐标分工。",
+            })],
+        }, {"prompt_tokens": 20, "completion_tokens": 5}
+
+
 def make_supervisor(tmp_path, model=None):
     store = Store(tmp_path / "fleet.sqlite")
     bridge = FleetBridge()
@@ -129,6 +195,21 @@ def test_fleet_agent_queries_live_state_and_materializes_two_scoped_missions(tmp
         "get_fleet_state", "resolve_destinations"
     ]
     assert plan["usage"] == {"prompt_tokens": 50, "completion_tokens": 15}
+
+
+def test_fleet_agent_accepts_explicit_coordinates_after_live_state_query(tmp_path):
+    store, bridge, supervisor = make_supervisor(tmp_path, CoordinateFleetModel())
+    plan = supervisor.plan("Robot 01去(2,0.5)，Robot 02去(2,-0.5)")
+
+    assert [item["name"] for item in plan["tool_trace"]] == ["get_fleet_state"]
+    assert [item["steps"][0]["x"] for item in plan["assignments"]] == [2.0, 2.0]
+    assert plan["assignments"][1]["steps"][0]["y"] == -0.5
+
+
+def test_fleet_agent_cannot_invent_coordinates_not_present_in_request(tmp_path):
+    _, _, supervisor = make_supervisor(tmp_path, CoordinateFleetModel())
+    with pytest.raises(Exception, match="用户未明确提供"):
+        supervisor.plan("让两台机器人去合适的位置")
 
 
 def test_fleet_schema_rejects_concurrent_use_of_single_charger(tmp_path):
@@ -169,6 +250,30 @@ def test_fleet_dispatch_is_atomic_and_runs_both_robot_missions(tmp_path):
         workflow.close()
 
 
+def test_fleet_workflow_serializes_conflicting_nav2_routes(tmp_path):
+    store = Store(tmp_path / "traffic-workflow.sqlite")
+    bridge = ConflictingFleetBridge()
+    mission = Supervisor(store, scene=SemanticScene())
+    supervisor = FleetSupervisor(store, bridge, mission, FleetModel())
+    plan = supervisor.plan("让两台机器人执行路线冲突的任务")
+    workflow = Workflow(bridge, store)
+    try:
+        runs = workflow.submit_fleet(plan)
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            current = [store.get(run["id"]) for run in runs]
+            if all(run["status"] == "verified" for run in current):
+                break
+            time.sleep(0.01)
+        assert all(run["status"] == "verified" for run in current)
+        assert bridge.max_active_motion == 1
+        kinds = [event["kind"] for run in current for event in run["events"]]
+        assert "traffic_waited" in kinds
+        assert kinds.count("traffic_released") == 2
+    finally:
+        workflow.close()
+
+
 def test_fleet_dispatch_rejects_whole_batch_when_one_robot_is_busy(tmp_path):
     store, bridge, supervisor = make_supervisor(tmp_path)
     plan = supervisor.plan("并行执行两项任务")
@@ -200,7 +305,12 @@ def test_failed_robot_remaining_navigation_is_handed_to_verified_peer(tmp_path):
             if current_plan.get("handoffs"):
                 handoff_id = current_plan["handoffs"][0]["handoff_run_id"]
                 handoff_run = store.get(handoff_id)
-                if handoff_run["status"] == "verified":
+                source_events = store.get(original[0]["id"])["events"]
+                if (
+                    handoff_run["status"] == "verified"
+                    and current_plan["handoffs"][0]["status"] == "verified"
+                    and any(event["kind"] == "handoff_finished" for event in source_events)
+                ):
                     break
             time.sleep(0.02)
         assert [store.get(run["id"])["status"] for run in original] == [
@@ -215,7 +325,7 @@ def test_failed_robot_remaining_navigation_is_handed_to_verified_peer(tmp_path):
         assert handoff_record["status"] == "verified"
         assert handoff_record["final_gazebo_error"] == 0.02
         source = store.get(original[0]["id"])
-        assert source["events"][-1]["kind"] == "handoff_finished"
+        assert any(event["kind"] == "handoff_finished" for event in source["events"])
     finally:
         workflow.close()
 

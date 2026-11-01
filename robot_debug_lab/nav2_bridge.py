@@ -673,7 +673,28 @@ class Nav2Bridge:
             "note": "共享Gazebo世界和两套Nav2已恢复到各自初始位置",
         }
 
-    def plan_path(self, robot, x, y, timeout=6.0):
+    @staticmethod
+    def _sample_path(poses, spacing=0.20):
+        points = []
+        for stamped in poses:
+            point = [
+                round(float(stamped.pose.position.x), 3),
+                round(float(stamped.pose.position.y), 3),
+            ]
+            if not points or math.hypot(
+                point[0] - points[-1][0], point[1] - points[-1][1]
+            ) >= spacing:
+                points.append(point)
+        if poses:
+            final = [
+                round(float(poses[-1].pose.position.x), 3),
+                round(float(poses[-1].pose.position.y), 3),
+            ]
+            if not points or final != points[-1]:
+                points.append(final)
+        return points
+
+    def plan_path(self, robot, x, y, timeout=6.0, include_path=False):
         """Ask Nav2's actual planner whether a reviewed pose has a path."""
         rt = self._rt(robot)
         if not rt.path_client.wait_for_server(timeout_sec=3):
@@ -705,7 +726,7 @@ class Nav2Bridge:
                 )
                 for a, b in zip(poses, poses[1:])
             )
-            return {
+            response = {
                 "reachable": int(result.error_code) == 0 and bool(poses),
                 "target": [float(x), float(y)],
                 "path_length": round(length, 3),
@@ -713,6 +734,9 @@ class Nav2Bridge:
                 "error_code": int(result.error_code),
                 "reason": result.error_msg or "path_found",
             }
+            if include_path:
+                response["path"] = self._sample_path(poses)
+            return response
         except (TimeoutError, RuntimeError):
             return {
                 "reachable": False, "target": [x, y], "reason": "planning_timeout"

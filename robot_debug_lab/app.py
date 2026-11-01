@@ -185,6 +185,7 @@ def state():
         "robots": app.state.bridge.public(),
         "runs": runs,
         "active_targets": active_targets,
+        "traffic": app.state.workflow.traffic.snapshot(),
         "plans": app.state.store.recent_plans(),
         "model": OPENFANG_MODEL if AGENT_BACKEND == "openfang" else MODEL,
         "ai_configured": AGENT_BACKEND == "openfang" or bool(API_KEY),

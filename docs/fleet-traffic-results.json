@@ -1,0 +1,67 @@
+{
+  "recorded_at": "2026-11-01T11:42:33.032435+00:00",
+  "plan_id": "f6aa2af38d53",
+  "planning_usage": {
+    "prompt_tokens": 10044,
+    "completion_tokens": 1009
+  },
+  "planner_tools": [
+    "get_fleet_state"
+  ],
+  "targets": {
+    "robot_1": [
+      2.0,
+      0.5
+    ],
+    "robot_2": [
+      2.0,
+      -0.5
+    ]
+  },
+  "reservations": [
+    {
+      "token": "9a12ecd5a12c",
+      "robot_id": "robot_1",
+      "run_id": "69d97ab68dd5",
+      "step_id": "S1",
+      "reservation_cells": 84,
+      "path_mode": "nav2_geometry",
+      "wait_seconds": 0.0,
+      "blocked_by": [],
+      "phase": "initial"
+    },
+    {
+      "token": "b9ee1c3bddd6",
+      "robot_id": "robot_2",
+      "run_id": "dd8522278974",
+      "step_id": "S1",
+      "reservation_cells": 84,
+      "path_mode": "nav2_geometry",
+      "wait_seconds": 10.335,
+      "blocked_by": [
+        "robot_1"
+      ],
+      "phase": "initial"
+    }
+  ],
+  "conflict_wait_count": 1,
+  "max_wait_seconds": 10.335,
+  "runs": [
+    {
+      "run_id": "69d97ab68dd5",
+      "robot_id": "robot_1",
+      "status": "verified",
+      "final_gazebo_error": 0.2213
+    },
+    {
+      "run_id": "dd8522278974",
+      "robot_id": "robot_2",
+      "status": "verified",
+      "final_gazebo_error": 0.0931
+    }
+  ],
+  "nav2_online_after": {
+    "robot_1": true,
+    "robot_2": true
+  }
+}

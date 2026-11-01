@@ -37,7 +37,7 @@
 
 **第二阶段后端已完成。** 四种机制不同的 ROS/Nav2 故障、AI/规则对照、复杂任务中途恢复、自动评测和“系统修复后同一步再做路线恢复”的组合案例均已落地。定位漂移使用真实 `/initialpose` 改变 AMCL 状态，并以 Gazebo 真值重新播种作为仿真专用白名单修复。动态代价地图候选生成、任意条件任务图、重启续跑和实体取放仍属于后续扩展。
 
-**第三阶段已完成并行分派、故障隔离和一次自动接替闭环。** Gazebo中现在有两台实体TurtleBot3，各自使用`/robot_1`和`/robot_2`命名空间运行独立雷达、里程计、TF、AMCL和Nav2。车队OpenFang Agent必须先查询两台机器人的实时位置与健康状态，再查询统一语义地点，输出每台机器人的结构化子任务；后端先同时占用两台机器人，全部可分派后才并行启动，并限制唯一充电站不能被同时分配。[真实车队验收](docs/fleet-acceptance-results.json)中两项并行任务均通过。新增的[接替验收](docs/fleet-handoff-results.json)在Robot 01首次导航时隐藏地中断其Nav2雷达输入且禁用自动修复：Robot 01保留为未解决，Robot 02完成自身任务后接替两个剩余步骤，以0.126 m Gazebo误差通过；接替策略本身为确定性程序，消耗0模型token。下一步仍需完成狭窄通道预约、死锁处理和多轮车队评测矩阵，因此第三阶段尚未完成。
+**第三阶段已完成并行分派、故障隔离、任务接替和真实路径预约闭环。** Gazebo中现在有两台实体TurtleBot3，各自使用`/robot_1`和`/robot_2`命名空间运行独立雷达、里程计、TF、AMCL和Nav2。车队OpenFang Agent查询实时车队状态与统一语义地点，输出结构化分工；后端执行原子分派、唯一充电站约束和可审计的失败任务接替。[真实车队验收](docs/fleet-acceptance-results.json)中两项并行任务均通过；[接替验收](docs/fleet-handoff-results.json)中Robot 02接替故障Robot 01的两个剩余步骤，以0.126 m Gazebo误差通过。新增的[路线协调验收](docs/fleet-traffic-results.json)使用两条真实Nav2路径：Robot 02因空间冲突等待10.335秒再通行，两台分别以0.221 m和0.093 m误差通过。预约一次取得整条冲突路线、结束后整体释放，不使用部分占用，因此不会形成两台机器人各持有一段路线并互等的死锁。下一步仍需多轮车队评测、等待超时策略和更细粒度的时空预约，因此第三阶段尚未完成。
 
 ## 系统结构
 
@@ -47,8 +47,9 @@ flowchart LR
   API --> Nav2[Nav2 导航任务]
   API --> Fleet[OpenFang 车队 Agent]
   Fleet --> Batch[原子分派与共享资源约束]
-  Batch --> R1[Robot 01 Agent + Nav2]
-  Batch --> R2[Robot 02 Agent + Nav2]
+  Batch --> Traffic[真实Nav2路径冲突检查与整路预约]
+  Traffic --> R1[Robot 01 Agent + Nav2]
+  Traffic --> R2[Robot 02 Agent + Nav2]
   R1 -->|无法恢复且允许接替| Handoff[确定性剩余任务接替]
   Handoff --> R2
   Nav2 -->|失败| Agent[OpenFang 诊断 Agent]
@@ -115,6 +116,7 @@ AI 模式需要在 `.env` 配置直连模型，或设置 `RDL_AGENT_BACKEND=open
 .venv/bin/python scripts/acceptance_combined_recovery.py --fault navigator_inactive
 .venv/bin/python scripts/acceptance_fleet.py --reset
 .venv/bin/python scripts/acceptance_fleet_handoff.py --output docs/fleet-handoff-results.json
+.venv/bin/python scripts/acceptance_fleet_traffic.py --output docs/fleet-traffic-results.json
 .venv/bin/python scripts/evaluate_fault_matrix.py --mode both
 .venv/bin/python scripts/evaluate_mission_faults.py --fault all --mode both --trials 3 --resume
 # 单独复现第四种定位故障

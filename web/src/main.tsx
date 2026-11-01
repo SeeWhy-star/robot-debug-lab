@@ -93,6 +93,11 @@ type State = {
   robots: Robot[];
   runs: Run[];
   active_targets?: Record<string, number[]>;
+  traffic?: {
+    active: { robot_id: string; step_id: string; path_mode: string }[];
+    queued: number;
+    clearance: number;
+  };
   model: string;
   ai_configured: boolean;
   token: string;
@@ -102,6 +107,7 @@ const labels: Record<string, string> = {
   queued: "排队",
   reproducing: "复现故障",
   navigating: "正在导航",
+  traffic_waiting: "等待路线通行权",
   investigating: "调查中",
   repairing: "执行修复",
   validating: "独立验收",
@@ -128,6 +134,7 @@ const active = (r: Run) =>
     "queued",
     "reproducing",
     "navigating",
+    "traffic_waiting",
     "investigating",
     "repairing",
     "validating",
@@ -520,6 +527,10 @@ function App() {
                   : ""}
               </small>
             </div>
+            <p className="hint">
+              路线协调：{data?.traffic?.active.length || 0} 条已占用 · {data?.traffic?.queued || 0} 条等待
+              {data?.traffic ? ` · 中心安全间距 ${data.traffic.clearance.toFixed(2)} m` : ""}
+            </p>
             <div className="fault-box">
               <div>
                 <b>故障实验</b>
