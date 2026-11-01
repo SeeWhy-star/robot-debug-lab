@@ -20,6 +20,7 @@ Two TurtleBot3 robots execute real, namespaced Nav2 goals in one repository-owne
 - When the stack is healthy but a reviewed semantic approach fails in execution, a separate Agent may select only a Nav2-verified alternative approach while completed and later mission steps remain unchanged.
 - Nav2 remains responsible for planning and control; the model never publishes velocity commands.
 - A separate OpenFang fleet Agent reads both robots' live poses and health plus the semantic registry, then returns one structured mission per selected robot. The gateway reserves the whole batch before starting either mission and enforces the single charging-station capacity.
+- If one fleet mission remains failed after its own recovery policy, an explicit deterministic handoff policy can transfer only the portable unfinished suffix to the verified peer. The source failure remains visible and the handoff is accepted independently against Gazebo.
 
 Local end-to-end acceptance on 2026-10-29 completed the same laser incident in both modes. The rules baseline finished with 0 tokens and 0.1816 m final error. The OpenFang AI run produced 11 recorded events, consumed 12132 provider-reported tokens, and finished with 0.2536 m final error. See the committed [acceptance summary](docs/nav2-acceptance-results.json).
 
@@ -51,6 +52,7 @@ Run the live incident acceptance against a running server:
 .venv/bin/python scripts/acceptance_replanning.py
 .venv/bin/python scripts/acceptance_combined_recovery.py --fault navigator_inactive
 .venv/bin/python scripts/acceptance_fleet.py --reset
+.venv/bin/python scripts/acceptance_fleet_handoff.py --output docs/fleet-handoff-results.json
 .venv/bin/python scripts/evaluate_fault_matrix.py --mode both
 .venv/bin/python scripts/evaluate_mission_faults.py --fault all --mode both --trials 3 --resume
 # Reproduce only the fourth localization mechanism
@@ -66,6 +68,8 @@ flowchart LR
   Fleet --> Guard0[Atomic batch and resource guard]
   Guard0 --> R1[Robot 01 Agent + Nav2]
   Guard0 --> R2[Robot 02 Agent + Nav2]
+  R1 -->|unrecovered and allowed| Handoff[Deterministic remaining-task handoff]
+  Handoff --> R2
   API --> Nav2[Per-robot Nav2 goal]
   Nav2 -->|failure| Agent[OpenFang diagnostic agent]
   Agent --> Tools[Read-only ROS tools]
@@ -93,7 +97,7 @@ A fourth mechanism now corrupts AMCL through the real `/initialpose` interface w
 
 **Phase 2 backend is complete:** four distinct ROS/Nav2 failures, AI-versus-rules comparison, mid-mission recovery, automated evaluation, and combined system-plus-route recovery are implemented. The original three-mechanism matrix passed 18 live runs; localization drift additionally passed direct and ordered-mission AI/rules comparisons. Costmap-derived candidate generation, general conditional task graphs, restart resumption, and physical manipulation remain later extensions.
 
-**Phase 3 is underway:** two physical Gazebo robot entities now run independent namespaced sensor, TF, AMCL and Nav2 stacks in one shared world. An OpenFang fleet Agent queries live fleet state and semantic destinations, proposes distance/health-aware assignments, and the deterministic workflow atomically starts both missions. The first [native-GUI fleet acceptance](docs/fleet-acceptance-results.json) completed both parallel missions with separate Gazebo errors of 0.236 m and 0.037 m. Per-robot scan interruption is isolated: Robot 01's Nav2 input can be 0 Hz while Robot 02 remains at 5 Hz. Deterministic aisle reservations, deadlock handling, automatic reassignment after an unrecovered robot failure, and a fleet evaluation matrix remain the next Phase 3 work.
+**Phase 3 is underway:** two physical Gazebo robot entities now run independent namespaced sensor, TF, AMCL and Nav2 stacks in one shared world. An OpenFang fleet Agent queries live fleet state and semantic destinations, proposes distance/health-aware assignments, and the deterministic workflow atomically starts both missions. The first [native-GUI fleet acceptance](docs/fleet-acceptance-results.json) completed both parallel missions with separate Gazebo errors of 0.236 m and 0.037 m. Per-robot scan interruption is isolated: Robot 01's Nav2 input can be 0 Hz while Robot 02 remains at 5 Hz. A second [live handoff acceptance](docs/fleet-handoff-results.json) left Robot 01's hidden scan failure unresolved, let Robot 02 finish its own mission, and then transferred two portable remaining steps to Robot 02; the handoff used no additional model call and passed at 0.126 m Gazebo error. Deterministic aisle reservations, deadlock handling, and a fleet evaluation matrix remain the next Phase 3 work.
 
 ## Real Nav2 source case
 

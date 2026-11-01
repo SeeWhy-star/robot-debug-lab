@@ -101,6 +101,7 @@ class FleetRequest(BaseModel):
     auto_repair: bool = True
     recovery_mode: Literal["ai", "rules"] = "ai"
     execute: bool = True
+    allow_handoff: bool = True
 
 
 class Target(BaseModel):
@@ -319,7 +320,9 @@ def fleet_task(q: FleetRequest):
     if AGENT_BACKEND == "direct" and not API_KEY:
         raise HTTPException(409, "Configure model credentials first")
     try:
-        plan = app.state.fleet_supervisor.plan(q.prompt, q.auto_repair)
+        plan = app.state.fleet_supervisor.plan(
+            q.prompt, q.auto_repair, q.allow_handoff
+        )
         if not q.execute:
             return {"plan": plan, "run_ids": []}
         runs = app.state.workflow.submit_fleet(plan, q.recovery_mode)

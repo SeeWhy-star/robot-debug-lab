@@ -43,6 +43,18 @@ class FleetBridge:
         return None
 
 
+class OneRobotFails(FleetBridge):
+    def __init__(self):
+        super().__init__()
+        self.failed = False
+
+    def navigate(self, robot, x, y, cancel=None):
+        if robot == "robot_1" and not self.failed:
+            self.failed = True
+            raise RuntimeError("robot_1 controller unavailable")
+        return super().navigate(robot, x, y, cancel)
+
+
 class FleetModel:
     def __init__(self, assignments=None):
         self.round = 0
@@ -170,3 +182,73 @@ def test_fleet_dispatch_rejects_whole_batch_when_one_robot_is_busy(tmp_path):
     finally:
         bridge.locks["robot_2"].release()
         workflow.close()
+
+
+def test_failed_robot_remaining_navigation_is_handed_to_verified_peer(tmp_path):
+    store = Store(tmp_path / "handoff.sqlite")
+    bridge = OneRobotFails()
+    mission = Supervisor(store, scene=SemanticScene())
+    supervisor = FleetSupervisor(store, bridge, mission, FleetModel())
+    plan = supervisor.plan("并行执行并在单机失败时接替", allow_handoff=True)
+    workflow = Workflow(bridge, store)
+    try:
+        original = workflow.submit_fleet(plan)
+        deadline = time.monotonic() + 3
+        handoff_run = None
+        while time.monotonic() < deadline:
+            current_plan = store.get_plan(plan["id"])
+            if current_plan.get("handoffs"):
+                handoff_id = current_plan["handoffs"][0]["handoff_run_id"]
+                handoff_run = store.get(handoff_id)
+                if handoff_run["status"] == "verified":
+                    break
+            time.sleep(0.02)
+        assert [store.get(run["id"])["status"] for run in original] == [
+            "failed", "verified"
+        ]
+        assert handoff_run["robot_id"] == "robot_2"
+        assert handoff_run["task_type"] == "fleet_handoff"
+        assert handoff_run["status"] == "verified"
+        assert handoff_run["steps"][0]["id"] == "H1"
+        assert ("robot_2", 2.0, 0.5) in bridge.moves
+        handoff_record = store.get_plan(plan["id"])["handoffs"][0]
+        assert handoff_record["status"] == "verified"
+        assert handoff_record["final_gazebo_error"] == 0.02
+        source = store.get(original[0]["id"])
+        assert source["events"][-1]["kind"] == "handoff_finished"
+    finally:
+        workflow.close()
+
+
+def test_fleet_handoff_can_be_disabled_by_request_policy(tmp_path):
+    store = Store(tmp_path / "handoff-disabled.sqlite")
+    bridge = OneRobotFails()
+    mission = Supervisor(store, scene=SemanticScene())
+    supervisor = FleetSupervisor(store, bridge, mission, FleetModel())
+    plan = supervisor.plan("并行执行但不要接替", allow_handoff=False)
+    workflow = Workflow(bridge, store)
+    try:
+        runs = workflow.submit_fleet(plan)
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            statuses = [store.get(run["id"])["status"] for run in runs]
+            if statuses == ["failed", "verified"]:
+                break
+            time.sleep(0.02)
+        assert statuses == ["failed", "verified"]
+        assert store.get_plan(plan["id"])["handoffs"] == []
+        assert ("robot_2", 2.0, 0.5) not in bridge.moves
+    finally:
+        workflow.close()
+
+
+def test_robot_specific_return_home_is_not_portable_between_robots():
+    source = {
+        "current_step": 0,
+        "steps": [{
+            "id": "S1", "action": "return_to_start", "x": -2.0, "y": -0.5,
+            "description": "返回Robot 01起点", "auto_repair": True,
+            "status": "failed",
+        }],
+    }
+    assert Workflow._handoff_steps(source) == []

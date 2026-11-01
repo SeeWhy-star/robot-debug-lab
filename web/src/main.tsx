@@ -78,6 +78,13 @@ type AssistantPlan = {
     rationale: string;
     steps: MissionStep[];
   }[];
+  handoffs?: {
+    source_robot_id: string;
+    target_robot_id: string;
+    handoff_run_id: string;
+    status: string;
+    final_gazebo_error?: number;
+  }[];
 };
 type State = {
   plans?: AssistantPlan[];
@@ -234,6 +241,7 @@ function App() {
     [busy, setBusy] = useState(false),
     [instruction, setInstruction] = useState(() => localStorage.getItem("rdl.plan") ? "" : "让机器人去货架 A"),
     [missionRepair, setMissionRepair] = useState(true),
+    [fleetHandoff, setFleetHandoff] = useState(true),
     [missionScope, setMissionScope] = useState<"single" | "fleet">("single"),
     [planning, setPlanning] = useState(false),
     [planId, setPlanId] = useState(() => localStorage.getItem("rdl.plan") || ""),
@@ -307,7 +315,7 @@ function App() {
     try {
       const d = missionScope === "fleet"
         ? await post("/api/fleet/tasks", {
-            prompt: instruction, auto_repair: missionRepair,
+            prompt: instruction, auto_repair: missionRepair, allow_handoff: fleetHandoff,
           })
         : await post("/api/assistant/tasks", {
             prompt: instruction, auto_repair: missionRepair,
@@ -449,6 +457,11 @@ function App() {
               onChange={(e) => setMissionRepair(e.target.checked)} />
             导航失败后，允许执行限定修复并重试原目标
           </label>
+          {missionScope === "fleet" && <label className="checkbox">
+            <input type="checkbox" checked={fleetHandoff}
+              onChange={(e) => setFleetHandoff(e.target.checked)} />
+            一台机器人仍无法完成时，允许健康机器人接替剩余可迁移步骤
+          </label>}
           <button className="primary" onClick={executeInstruction}
             disabled={busy || planning || !connected || !instruction.trim()}>
             {planning ? "Assistant 正在解析任务…" : clarifying ? "补充并继续" : "解析并执行任务"}
@@ -475,6 +488,15 @@ function App() {
                 {step.x !== undefined && step.y !== undefined ? ` → (${step.x}, ${step.y})` : ""}
               </p>)}
             </div>)}
+            {(assistantPlan.handoffs || []).map((handoff) => <p key={handoff.handoff_run_id}>
+              接替 · {handoff.source_robot_id.replace("robot_", "Robot 0")} → {handoff.target_robot_id.replace("robot_", "Robot 0")}
+              {` · ${labels[handoff.status] || handoff.status}`}
+              {handoff.final_gazebo_error != null ? ` · Gazebo 误差 ${handoff.final_gazebo_error.toFixed(3)} m` : ""}
+              <button className="quiet" onClick={() => {
+                setSelected(handoff.handoff_run_id);
+                document.getElementById("investigation")?.scrollIntoView({ behavior: "smooth" });
+              }}>查看接替结果</button>
+            </p>)}
             <small>规划后端：{(assistantPlan.usage?.prompt_tokens || 0) + (assistantPlan.usage?.completion_tokens || 0) === 0 ? "确定性解析（未调用模型）" : "模型结构化规划"} · tokens：{(assistantPlan.usage?.prompt_tokens || 0) + (assistantPlan.usage?.completion_tokens || 0)}</small>
           </div>}
         </section>

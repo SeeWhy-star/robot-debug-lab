@@ -1,0 +1,69 @@
+{
+  "recorded_at": "2026-11-01T07:56:41.345681+00:00",
+  "plan_id": "fe8434c30a95",
+  "planning_usage": {
+    "prompt_tokens": 20863,
+    "completion_tokens": 1366
+  },
+  "planner_tools": [
+    "get_fleet_state",
+    "resolve_destinations"
+  ],
+  "scheduled_fault_hidden_from_agent": "scan_interrupted on robot_1 navigation attempt 1",
+  "source_run": {
+    "run_id": "a2b3230d440a",
+    "robot_id": "robot_1",
+    "status": "unresolved",
+    "diagnosis": "scan_interrupted",
+    "auto_repair": false
+  },
+  "peer_original_run": {
+    "run_id": "c3c47705d6ea",
+    "robot_id": "robot_2",
+    "status": "verified",
+    "completed_steps": 4
+  },
+  "handoff": {
+    "source_run_id": "a2b3230d440a",
+    "source_robot_id": "robot_1",
+    "handoff_run_id": "41a117259c1e",
+    "target_robot_id": "robot_2",
+    "step_ids": [
+      "H1",
+      "H2"
+    ],
+    "status": "verified",
+    "finished": 1793519801.1232638,
+    "final_gazebo_error": 0.1257,
+    "completed_steps": 2,
+    "model_tokens": 0
+  },
+  "nav2_online_after": {
+    "robot_1": true,
+    "robot_2": true
+  },
+  "scan_after_handoff_before_cleanup": {
+    "robot_1": {
+      "raw_scan_hz": 5.0,
+      "nav2_scan_hz": 0.0,
+      "scan_forwarding": false,
+      "observed": 1793519814.3472035
+    },
+    "robot_2": {
+      "raw_scan_hz": 5.0,
+      "nav2_scan_hz": 5.0,
+      "scan_forwarding": true,
+      "observed": 1793519814.3474066
+    }
+  },
+  "cleanup": {
+    "robot_1": {
+      "nav2_online": true,
+      "nav2_scan_hz": 5.0
+    },
+    "robot_2": {
+      "nav2_online": true,
+      "nav2_scan_hz": 5.0
+    }
+  }
+}

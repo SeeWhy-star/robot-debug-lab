@@ -19,6 +19,11 @@ export async function smoke(browser) {
       assert.equal(await page.locator(".robot-card").count(), 2, "two live robot cards expected");
       await page.getByRole("button", { name: "车队协同 Agent", exact: true }).click();
       assert.match(await page.locator("#instruction").getAttribute("placeholder"), /另一台/);
+      assert.equal(
+        await page.getByLabel("一台机器人仍无法完成时，允许健康机器人接替剩余可迁移步骤").isChecked(),
+        true,
+        "fleet handoff policy should be visible and enabled",
+      );
       await page.getByRole("button", { name: "所选机器人", exact: true }).click();
       await page.getByRole("button", { name: "新建指令", exact: true }).click();
       assert.equal(await page.getByRole("button", { name: "解析并执行任务", exact: true }).isDisabled(), true);

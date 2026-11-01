@@ -13,6 +13,7 @@ class Workflow:
         robot_ids = tuple(getattr(bridge, "robot_ids", bridge.locks.keys()))
         self.agents = {rid: RobotAgent(bridge, store, robot=rid) for rid in robot_ids}
         self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=max(2, len(robot_ids)))
+        self.fleet_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         self.cancel_events = {}
         self.dispatch_lock = threading.Lock()
         self.closed = False
@@ -196,6 +197,12 @@ class Workflow:
                     runs.append((run, cancel))
                 for run, cancel in runs:
                     self.pool.submit(self.run_mission, run, cancel)
+                if plan.get("allow_handoff", False) and len(runs) > 1:
+                    self.fleet_pool.submit(
+                        self._monitor_fleet,
+                        plan["id"],
+                        [run["id"] for run, _ in runs],
+                    )
                 return [run for run, _ in runs]
             except Exception:
                 for run, _ in runs:
@@ -206,6 +213,147 @@ class Workflow:
                     if lock.locked():
                         lock.release()
                 raise
+
+    @staticmethod
+    def _handoff_steps(source):
+        """Return a clean, portable suffix without robot-specific home actions."""
+        start = source.get("current_step")
+        if start is None:
+            start = next(
+                (index for index, step in enumerate(source.get("steps", []))
+                 if step.get("status") != "completed"),
+                len(source.get("steps", [])),
+            )
+        remaining = source.get("steps", [])[start:]
+        if not remaining or any(step.get("action") == "return_to_start" for step in remaining):
+            return []
+        allowed = {
+            "id", "action", "destination_id", "x", "y", "duration_seconds",
+            "description", "auto_repair", "approach_id", "pose_source",
+        }
+        result = []
+        for index, original in enumerate(remaining, 1):
+            step = {key: deepcopy(value) for key, value in original.items() if key in allowed}
+            step.update(id=f"H{index}", status="pending")
+            result.append(step)
+        if result[0].get("action") == "simulate_charge":
+            return []
+        return result
+
+    def _monitor_fleet(self, plan_id, run_ids):
+        """After the batch settles, transfer one failed portable suffix once."""
+        terminal = {"verified", "unresolved", "failed", "canceled"}
+        while not self.closed:
+            runs = [self.store.get(run_id) for run_id in run_ids]
+            if all(run and run.get("status") in terminal for run in runs):
+                break
+            time.sleep(0.2)
+        if self.closed:
+            return
+        failed = [run for run in runs if run["status"] in {"unresolved", "failed"}]
+        healthy = [run for run in runs if run["status"] == "verified"]
+        if len(failed) != 1 or len(healthy) != 1:
+            return
+        source, peer = failed[0], healthy[0]
+        steps = self._handoff_steps(source)
+        if not steps:
+            self.store.event(source, "handoff_skipped", "剩余任务不满足安全接替条件", {
+                "fleet_plan_id": plan_id,
+                "candidate_robot": peer["robot_id"],
+            })
+            return
+        target_robot = peer["robot_id"]
+        with self.dispatch_lock:
+            if self.closed or not self.bridge.locks[target_robot].acquire(False):
+                self.store.event(source, "handoff_skipped", "接替机器人当前不可用", {
+                    "fleet_plan_id": plan_id,
+                    "candidate_robot": target_robot,
+                })
+                return
+            try:
+                plan = self.store.get_plan(plan_id) or {}
+                handoff = self.store.new(target_robot, source["mode"], source["prompt"])
+                handoff_plan = {
+                    "id": plan_id,
+                    "plan_type": "fleet_handoff",
+                    "request_text": source["prompt"],
+                    "robot_id": target_robot,
+                    "source_run_id": source["id"],
+                    "steps": deepcopy(steps),
+                }
+                handoff.update(
+                    backend="deterministic_handoff",
+                    planner_backend=plan.get("backend", AGENT_BACKEND),
+                    task_type="fleet_handoff",
+                    fleet_plan_id=plan_id,
+                    handoff_from={
+                        "run_id": source["id"],
+                        "robot_id": source["robot_id"],
+                        "reason": source.get("error") or (
+                            source.get("steps", [{}])[source.get("current_step") or 0]
+                            .get("failure_reason")
+                        ),
+                    },
+                    plan=handoff_plan,
+                    steps=deepcopy(steps),
+                    current_step=None,
+                    active_target=None,
+                    target=None,
+                    target_history=[],
+                    plan_version=1,
+                    plan_revisions=[],
+                    planning_usage={"prompt_tokens": 0, "completion_tokens": 0},
+                )
+                self.store.save(handoff)
+                cancel = threading.Event()
+                self.cancel_events[handoff["id"]] = cancel
+                record = {
+                    "source_run_id": source["id"],
+                    "source_robot_id": source["robot_id"],
+                    "handoff_run_id": handoff["id"],
+                    "target_robot_id": target_robot,
+                    "step_ids": [step["id"] for step in steps],
+                    "status": "dispatched",
+                }
+                self.store.event(source, "handoff_dispatched", "未完成任务已转交健康机器人", record)
+                plan.setdefault("handoffs", []).append(record)
+                self.store.save_plan(plan)
+                self.pool.submit(self.run_mission, handoff, cancel)
+            except Exception:
+                self.cancel_events.pop(handoff["id"], None) if "handoff" in locals() else None
+                self.bridge.locks[target_robot].release()
+                raise
+
+    def _finish_handoff(self, run):
+        """Persist the terminal handoff outcome in both linked records."""
+        if run.get("task_type") != "fleet_handoff":
+            return
+        plan = self.store.get_plan(run["fleet_plan_id"])
+        if not plan:
+            return
+        record = next(
+            (
+                item for item in plan.get("handoffs", [])
+                if item.get("handoff_run_id") == run["id"]
+            ),
+            None,
+        )
+        if not record:
+            return
+        record.update(
+            status=run["status"],
+            finished=run.get("finished"),
+            final_gazebo_error=(run.get("validation") or {}).get("error"),
+        )
+        self.store.save_plan(plan)
+        source = self.store.get(record["source_run_id"])
+        if source:
+            self.store.event(
+                source,
+                "handoff_finished",
+                "接替任务已完成独立验收" if run["status"] == "verified" else "接替任务未完成",
+                deepcopy(record),
+            )
 
     def _mission_navigation(self, r, step, cancel, phase="initial"):
         rid = r["robot_id"]
@@ -476,6 +624,7 @@ class Workflow:
                 r["finished"] = time.time()
                 try:
                     self.store.save(r)
+                    self._finish_handoff(r)
                 finally:
                     self.cancel_events.pop(r["id"], None)
                     self.bridge.locks[rid].release()
@@ -577,4 +726,5 @@ class Workflow:
             self.closed = True
             for e in list(self.cancel_events.values()):
                 e.set()
+        self.fleet_pool.shutdown(wait=True)
         self.pool.shutdown(wait=True)
