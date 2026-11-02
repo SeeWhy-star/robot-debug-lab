@@ -61,7 +61,7 @@ class Diagnose(BaseModel):
     robots: list[str] = Field(
         default=["robot_1"], min_length=1, max_length=2
     )
-    mode: Literal["ai", "rules"] = "ai"
+    mode: Literal["ai", "rules", "no_tools_llm"] = "ai"
     prompt: str = Field(
         default="排查机器人无法到达目标的原因，用证据验证并给出修复方案。",
         min_length=1,
@@ -312,7 +312,7 @@ def navigate(rid: str, t: Target):
 
 @app.post("/api/runs")
 def diagnose(q: Diagnose):
-    if q.mode == "ai" and AGENT_BACKEND == "direct" and not API_KEY:
+    if q.mode in {"ai", "no_tools_llm"} and AGENT_BACKEND == "direct" and not API_KEY:
         raise HTTPException(409, "Configure model credentials first")
     ids = list(dict.fromkeys(q.robots))
     if any(rid not in app.state.bridge.locks for rid in ids):

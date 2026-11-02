@@ -1040,3 +1040,58 @@ def test_transform_health_separates_one_stale_edge_from_active_lifecycle(monkeyp
     assert [edge["available"] for edge in health["required"]] == [False, True, True]
     assert health["bt_navigator_state"] == "active"
     assert health["localization_state"] == "active"
+
+
+def test_no_tools_agent_receives_only_fixed_navigation_payload(tmp_path):
+    class MustNotObserve:
+        def __getattr__(self, name):
+            raise AssertionError(f"no-tools strategy accessed bridge.{name}")
+
+    class NoToolsModel:
+        def complete(self, messages, tools):
+            assert [tool["function"]["name"] for tool in tools] == [
+                "finish_diagnosis"
+            ]
+            payload = json.loads(messages[1]["content"])
+            assert set(payload) == {
+                "robot_id", "task_description", "target", "navigation_attempt"
+            }
+            assert set(payload["navigation_attempt"]) == {
+                "evidence_id", "nav2_success", "nav2_status",
+                "duration_seconds", "final_pose",
+            }
+            arguments = {
+                "classification": "insufficient_evidence",
+                "known_cause": None,
+                "suspected_subsystem": "unknown",
+                "summary": "仅有导航失败结果，无法定位子系统。",
+                "cited_evidence": [payload["navigation_attempt"]["evidence_id"]],
+                "ruled_out": [],
+                "repair_requested": False,
+                "requested_repair": None,
+                "recommended_action": "收集现场只读证据后再判断。",
+            }
+            return {
+                "role": "assistant",
+                "tool_calls": [{
+                    "id": "finish",
+                    "type": "function",
+                    "function": {
+                        "name": "finish_diagnosis",
+                        "arguments": json.dumps(arguments, ensure_ascii=False),
+                    },
+                }],
+            }, {"prompt_tokens": 12, "completion_tokens": 8}
+
+    store = Store(tmp_path / "no-tools-agent.sqlite")
+    run = store.new("robot_1", "no_tools_llm", "导航到目标点")
+    run.update(target=[2.0, 0.5], baseline={"success": False})
+    _navigation_evidence(store, run)
+
+    result = RobotAgent(
+        MustNotObserve(), store, model=NoToolsModel(), robot="robot_1"
+    ).diagnose(run, threading.Event())
+
+    assert result["strategy"] == "no_tools_llm"
+    assert result["classification"] == "insufficient_evidence"
+    assert not [event for event in run["events"] if event["kind"] == "tool_call"]

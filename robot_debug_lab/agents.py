@@ -7,6 +7,7 @@ from .contracts import (
     DIAGNOSTIC_PROMPT_VERSION,
     KNOWN_REPAIRS,
     SUBSYSTEMS,
+    no_tools_input,
     validate_diagnosis,
     validate_diagnosis_evidence,
 )
@@ -242,14 +243,27 @@ class RobotAgent:
 
     def _diagnose(self, r, cancel, model):
         evidence = {}
+        no_tools = r["mode"] == "no_tools_llm"
 
         def collect(name):
             e = self.tool(name, r)
             evidence[e["id"]] = e
             return e
 
-        # Initial evidence is captured deterministically, further tools selected by model.
-        initial = collect("inspect_graph")
+        # The no-tools ablation receives exactly the failed navigation record.
+        # Other strategies start with a server-captured graph observation.
+        if no_tools:
+            initial = None
+            navigation_events = [
+                event for event in r.get("events", [])
+                if event.get("kind") == "navigation_attempt"
+            ]
+            if not navigation_events:
+                raise ModelError("No-tools diagnosis requires a navigation attempt")
+            navigation = navigation_events[-1]
+            evidence[navigation["id"]] = navigation
+        else:
+            initial = collect("inspect_graph")
         if r["mode"] == "rules":
             p = collect("read_parameters")
             cause = infer(initial["data"], p["data"])
@@ -266,25 +280,28 @@ class RobotAgent:
                 "content": system,
             }
         ]
-        messages.append(
-            {
-                "role": "user",
-                "content": json.dumps(
-                    {
-                        "request": r["prompt"],
-                        "baseline": r["baseline"],
-                        "initial_evidence": initial,
-                    },
-                    ensure_ascii=False,
-                ),
+        user_payload = (
+            no_tools_input(
+                r["robot_id"], r["prompt"], r["target"], navigation
+            )
+            if no_tools
+            else {
+                "request": r["prompt"],
+                "baseline": r["baseline"],
+                "initial_evidence": initial,
             }
         )
+        messages.append({
+            "role": "user",
+            "content": json.dumps(user_payload, ensure_ascii=False),
+        })
+        available_tools = [TOOLS[-1]] if no_tools else TOOLS
         protocol_retries = 0
         for step in range(6):
             if cancel.is_set():
                 raise Canceled()
             try:
-                message, usage = model.complete(messages, TOOLS)
+                message, usage = model.complete(messages, available_tools)
             except ModelError as error:
                 if (
                     "valid gateway tool requests" not in str(error)
@@ -318,7 +335,7 @@ class RobotAgent:
                 "模型选择下一步调查",
                 {
                     "agent": "diagnostic",
-                    "mode": "tools_llm",
+                    "mode": "no_tools_llm" if no_tools else "tools_llm",
                     "round": step + 1,
                     "requested_tools": [
                         call.get("function", {}).get("name", "invalid")
@@ -386,7 +403,7 @@ class RobotAgent:
                             raise ValueError("Invalid explanation")
                         args.update(
                             schema_version=2,
-                            strategy="tools_llm",
+                            strategy=("no_tools_llm" if no_tools else "tools_llm"),
                             cause=(
                                 args["known_cause"]
                                 if args["classification"] == "known_fault"

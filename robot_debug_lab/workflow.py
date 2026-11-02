@@ -905,8 +905,17 @@ class Workflow:
         )
 
     def _normalize_direct_diagnosis(self, r, diagnosis):
-        strategy = "rules" if r["mode"] == "rules" else "tools_llm"
-        value = diagnosis_from_legacy(diagnosis, strategy)
+        strategy = (
+            "rules" if r["mode"] == "rules" else
+            ("no_tools_llm" if r["mode"] == "no_tools_llm" else "tools_llm")
+        )
+        value = (
+            deepcopy(diagnosis)
+            if diagnosis.get("schema_version") == 2
+            else diagnosis_from_legacy(diagnosis, strategy)
+        )
+        if value.get("strategy") != strategy:
+            raise ValueError("Diagnosis strategy does not match run mode")
         validate_diagnosis_evidence(
             value,
             r["events"],

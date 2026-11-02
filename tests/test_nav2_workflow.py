@@ -518,6 +518,91 @@ def test_distinct_nav2_faults_require_matching_evidence_and_repair(tmp_path, cau
     assert bridge.moves == [("robot_1", 2.0, 0.5)] * 2
 
 
+def test_tools_llm_unknown_fault_escalates_without_rules_reclassification(tmp_path):
+    class UnknownTransformBridge(MultiMechanismBridge):
+        def __init__(self):
+            super().__init__(None)
+            self.repair_called = False
+
+        def navigate(self, robot, x, y, cancel=None):
+            self.moves.append((robot, x, y))
+            return {
+                "success": False,
+                "nav2_success": False,
+                "error": 4.1,
+                "elapsed": 0.4,
+                "target": [x, y],
+                "message": "Failed to transform end pose to global frame",
+            }
+
+        def transform_health(self, robot):
+            return {
+                "robot_id": robot,
+                "required": [{
+                    "edge": "map->odom", "available": False,
+                    "age_seconds": 2.0, "static": False,
+                }],
+                "all_available": False,
+                "bt_navigator_state": "active",
+                "localization_state": "active",
+            }
+
+        def repair(self, robot, cause):
+            self.repair_called = True
+            raise AssertionError("unknown fault must not execute a repair")
+
+    class UnknownTransformModel:
+        def __init__(self):
+            self.round = 0
+
+        def complete(self, messages, tools):
+            self.round += 1
+            if self.round == 1:
+                return InvestigatingModel._call(
+                    "inspect_transforms", "transforms"
+                ), {}
+            evidence_ids = []
+            for message in messages:
+                if message.get("role") == "tool":
+                    value = json.loads(message["content"])
+                    if "id" in value:
+                        evidence_ids.append(value["id"])
+            return InvestigatingModel._call(
+                "finish_diagnosis",
+                "finish",
+                {
+                    "classification": "unknown_fault",
+                    "known_cause": None,
+                    "suspected_subsystem": "tf",
+                    "summary": "导航所需坐标变换不再更新，现有白名单无对应原因。",
+                    "cited_evidence": evidence_ids,
+                    "ruled_out": [],
+                    "repair_requested": False,
+                    "requested_repair": None,
+                    "recommended_action": "升级人工检查变换发布链路。",
+                },
+            ), {}
+
+    bridge = UnknownTransformBridge()
+    store = Store(tmp_path / "unknown-transform.db")
+    flow = Workflow(bridge, store)
+    flow.agents["robot_1"] = RobotAgent(
+        bridge, store, model=UnknownTransformModel(), robot="robot_1"
+    )
+    run = flow.submit_many([
+        {"robot_id": "robot_1", "x": 2.0, "y": 0.5, "auto_repair": True}
+    ], "ai", "调查导航失败")[0]
+    flow.pool.shutdown(wait=True)
+    flow.fleet_pool.shutdown(wait=True)
+
+    result = store.get(run["id"])
+    assert result["phase"] == "escalated"
+    assert result["diagnosis"]["classification"] == "unknown_fault"
+    assert result["diagnosis"]["suspected_subsystem"] == "tf"
+    assert result["repair_authorization"]["decision"] == "not_applicable"
+    assert bridge.repair_called is False
+
+
 def test_mid_mission_fault_repairs_failed_step_without_replaying_completed_step(tmp_path):
     class ScheduledControllerFaultBridge(MultiMechanismBridge):
         def __init__(self):
