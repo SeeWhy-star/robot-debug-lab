@@ -32,9 +32,11 @@ export async function smoke(browser) {
       await page.getByText("指令历史（选择后只查看，不会再次执行）").waitFor();
       await page.getByText("Gazebo + Nav2 仿真").waitFor({ state: "attached" });
       await page.getByText(/路线协调：0 条已占用/).waitFor({ state: "attached" });
+      await page.getByRole("tab", { name: "故障实验" }).click();
       await page.getByRole("button", { name: "规则基线", exact: true }).click();
       assert.match(await page.getByRole("button", { name: "规则基线", exact: true }).getAttribute("class"), /chosen/);
       await page.getByRole("button", { name: "模型 AI", exact: true }).click();
+      await page.getByRole("tab", { name: "自然语言任务" }).click();
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
       assert.equal(overflow, false, `${viewport.width}px horizontal overflow`);
       await page.getByRole("button", { name: "新建指令", exact: true }).click();

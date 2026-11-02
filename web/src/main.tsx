@@ -2,277 +2,106 @@ import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./style.css";
 import SourceCase from "./SourceCase";
-type Pose = { x: number; y: number; theta: number; speed: number };
-type Robot = {
-  id: string;
-  pose?: Pose;
-  trace: number[][];
-  controller_alive: boolean;
-  busy: boolean;
-  runtime?: string;
-  scan?: { raw_scan_hz: number; nav2_scan_hz: number; scan_forwarding: boolean };
-  localization?: { status: string; position_error: number | null; threshold?: number };
-};
-type Event = {
-  id: string;
-  time: number;
-  kind: string;
-  title: string;
-  data: unknown;
-};
-type Verdict = {
-  success: boolean;
-  error: number;
-  elapsed: number;
-  message: string;
-};
-type Run = {
-  target?: number[];
-  task_type?: string;
-  plan?: AssistantPlan;
-  backend?: string;
-  id: string;
-  robot_id: string;
-  mode: string;
-  status: string;
-  created: number;
-  events: Event[];
-  diagnosis?: {
-    cause: string;
-    summary: string;
-    evidence_ids: string[];
-    repair_rationale: string;
-  };
-  baseline?: Verdict;
-  validation?: Verdict;
-  usage: { prompt_tokens: number; completion_tokens: number };
-  error?: string;
-  active_target?: number[] | null;
-  steps?: MissionStep[];
-};
-type MissionStep = {
-  id: string;
-  action: string;
-  description: string;
-  destination_id?: string;
-  x?: number;
-  y?: number;
-  duration_seconds?: number;
-  auto_repair: boolean;
-  status: string;
-};
-type AssistantPlan = {
-  id: string;
-  status: string;
-  message: string;
-  steps?: MissionStep[];
-  usage?: { prompt_tokens: number; completion_tokens: number };
-  run_ids: string[];
-  prompt?: string;
-  auto_repair_ceiling?: boolean;
-  turns?: { role: string; content: string }[];
-  robot_id?: string;
-  plan_type?: string;
-  assignments?: {
-    robot_id: string;
-    rationale: string;
-    steps: MissionStep[];
-  }[];
-  handoffs?: {
-    source_robot_id: string;
-    target_robot_id: string;
-    handoff_run_id: string;
-    status: string;
-    final_gazebo_error?: number;
-  }[];
-  reason?: string;
-  suggested_requests?: string[];
-  spatial_analysis?: {
-    objective: string;
-    metrics: {
-      target_separation: number;
-      total_nav2_path_length: number;
-      requested_clearance: number;
+import Scene from "./Scene";
+import RunDetail, { PhaseBadge } from "./RunDetail";
+import Experiment from "./Experiment";
+import type { AssistantPlan, State } from "./types";
+import {
+  causes, clock, isTerminal, legacyStatus, phaseOf, robotColor, robotName, robotShort, strategies, tokens,
+} from "./format";
+
+const FAULTS = [
+  "scan_interrupted", "navigator_inactive", "controller_velocity_zero", "localization_drift",
+  "transform_updates_stopped",
+];
+
+function useLabState() {
+  const [data, setData] = useState<State | null>(null);
+  const [connected, setConnected] = useState(false);
+  useEffect(() => {
+    let poll: number | undefined;
+    const s = new EventSource("/api/events");
+    s.onmessage = (e) => {
+      setData(JSON.parse(e.data));
+      setConnected(true);
+      window.clearInterval(poll);
+      poll = undefined;
     };
-    evidence: {
-      map: string;
-      map_fingerprint: string;
-      safe_candidate_count: number;
-      route_validation: string;
-      algorithm: string;
+    // Contract v2 §8: fall back to polling /api/state while SSE is down.
+    s.onerror = () => {
+      setConnected(false);
+      if (poll === undefined) {
+        poll = window.setInterval(() => {
+          fetch("/api/state").then((r) => r.json()).then(setData).catch(() => undefined);
+        }, 2000);
+      }
     };
-  };
-  fleet_acceptance?: {
-    success: boolean;
-    source: string;
-    target_separation?: number;
-    actual_separation?: number;
-    separation_error?: number;
-    position_threshold?: number;
-  };
-  handoff_policy_reason?: string;
-};
-type State = {
-  plans?: AssistantPlan[];
-  runtime?: string;
-  simulation?: string;
-  robots: Robot[];
-  runs: Run[];
-  active_targets?: Record<string, number[]>;
-  traffic?: {
-    active: { robot_id: string; step_id: string; path_mode: string }[];
-    queued: number;
-    clearance: number;
-  };
-  model: string;
-  ai_configured: boolean;
-  token: string;
-  ros_domain: string;
-};
-const labels: Record<string, string> = {
-  queued: "排队",
-  reproducing: "复现故障",
-  navigating: "正在导航",
-  traffic_waiting: "等待路线通行权",
-  investigating: "调查中",
-  repairing: "执行修复",
-  validating: "独立验收",
-  waiting: "等待中",
-  simulated_charging: "仿真充电中",
-  idle: "空闲",
-  verified: "验证通过",
-  unresolved: "尚未解决",
-  failed: "执行失败",
-  canceled: "已取消",
-  diagnosed: "诊断完成",
-  interrupted: "任务中断",
-};
-const causes: Record<string, string> = {
-  scan_interrupted: "导航雷达数据中断",
-  navigator_inactive: "BT Navigator 生命周期停用",
-  controller_velocity_zero: "Controller 速度配置为零",
-  localization_drift: "AMCL 定位漂移",
-  healthy: "状态正常",
-  unknown: "证据不足",
-};
-const active = (r: Run) =>
-  [
-    "queued",
-    "reproducing",
-    "navigating",
-    "traffic_waiting",
-    "investigating",
-    "repairing",
-    "validating",
-    "waiting",
-    "simulated_charging",
-  ].includes(r.status);
-function Scene({ robots, activeTargets }: { robots: Robot[]; activeTargets: Record<string, number[]> }) {
-  // Exact transform for the Nav2 map: 10 m × 8 m, origin (-5, -4).
-  const sx = (x: number) => 315 + x * 50;
-  const sy = (y: number) => 225 - y * 50;
-  return (
-    <svg
-      viewBox="0 0 600 470"
-      role="img"
-      aria-label="Nav2 实际占据栅格、机器人实时轨迹和目标位置"
-    >
-      <defs>
-        <pattern id="grid" width="40" height="35" patternUnits="userSpaceOnUse">
-          <path
-            d="M 40 0 H 0 V 35"
-            fill="none"
-            stroke="#24373c"
-            strokeWidth=".6"
-          />
-        </pattern>
-      </defs>
-      <rect x="65" y="25" width="500" height="400" fill="url(#grid)" />
-      <image
-        href="/assets/rdl-warehouse-map.png"
-        x="65"
-        y="25"
-        width="500"
-        height="400"
-        preserveAspectRatio="none"
-      />
-      <path d="M65 25 V425 H565" fill="none" stroke="#628087" />
-      {[-4, -2, 0, 2, 4].map((n) => (
-        <g key={n}>
-          <text x={sx(n)} y="447" fill="#6d8a91" fontSize="11">
-            {n}
-          </text>
-          <text x="15" y={sy(n)} fill="#6d8a91" fontSize="11">
-            {n}
-          </text>
-        </g>
-      ))}
-      <g fontSize="10" fontWeight="600">
-        <text x={sx(3.2) - 18} y={sy(.5) - 5} fill="#8fe5d2">实体货架 A</text>
-        <text x={sx(.55) - 25} y={sy(-.5) - 24} fill="#ef9a7f">实体障碍箱</text>
-        <text x={sx(-4.3) - 12} y={sy(-3.15) - 18} fill="#7edba9">充电站</text>
-      </g>
-      {robots.map((r, i) => {
-        const goal = activeTargets[r.id];
-        if (!goal) return null;
-        const color = i ? "#aeb9ff" : "#62e0c1";
-        return <g key={r.id + "goal"} transform={`translate(${sx(goal[0])},${sy(goal[1])})`}>
-          <circle r={i ? 19 : 23} fill="none" stroke={color} strokeDasharray="4 4" />
-          <path d="M-7 0H7M0-7V7" stroke={color} />
-          <text x="-10" y={i ? 42 : -30} fill={color} fontSize="10">
-            {r.id.replace("robot_", "R0")} 目标 ({goal[0]}, {goal[1]})
-          </text>
-        </g>;
-      })}
-      {robots.map((r, i) => {
-        const color = i ? "#aeb9ff" : "#62e0c1";
-        const p = r.pose;
-        return (
-          <g key={r.id}>
-            <polyline
-              points={r.trace
-                .map(([x, y]) => `${sx(x)},${sy(y)}`)
-                .join(" ")}
-              fill="none"
-              stroke={color}
-              strokeWidth="2"
-              opacity=".65"
-            />
-            {p && (
-              <g transform={`translate(${sx(p.x)},${sy(p.y)})`}>
-                <circle r="17" fill={color} opacity=".13" />
-                <path
-                  d="M12 0L-8 -7L-5 0L-8 7Z"
-                  fill={color}
-                  transform={`rotate(${(-p.theta * 180) / Math.PI})`}
-                />
-                <text x="18" y={i ? 20 : -15} fill={color} fontSize="12">
-                  {r.id.replace("robot_", "R0")}
-                </text>
-              </g>
-            )}
-          </g>
-        );
-      })}
-      <text x="76" y="48" fill="#8ba4aa" fontSize="10">
-        LIVE ROS 2 TELEMETRY · ACTUAL NAV2 OCCUPANCY MAP
-      </text>
-    </svg>
-  );
+    return () => {
+      s.close();
+      window.clearInterval(poll);
+    };
+  }, []);
+  return { data, connected };
 }
+
+function PlanResult({ plan, onOpen }: { plan: AssistantPlan; onOpen: (id: string) => void }) {
+  const clarifying = plan.status === "needs_clarification";
+  const used = tokens(plan.usage);
+  const sa = plan.spatial_analysis;
+  const fa = plan.fleet_acceptance;
+  return <div className="plan" role="status">
+    <div className="plan-head">
+      <b>{plan.run_ids.length ? "已分派" : clarifying ? "需要补充" : plan.status === "not_executable" ? "不可执行"
+        : plan.status === "continued" ? "已由后续指令接续" : "未执行"}</b>
+      <span className="muted">{plan.plan_type === "fleet" ? "车队 Agent" : robotName(plan.robot_id)}
+        {" · "}{used === 0 ? "确定性解析，未调用模型" : `模型规划 · ${used} tokens`}</span>
+    </div>
+    <p>{plan.message}</p>
+    {!!plan.suggested_requests?.length && <ul className="plain">
+      {plan.suggested_requests.map((item) => <li key={item}>可改为：{item}</li>)}
+    </ul>}
+    {sa && <p className="small">
+      空间分析 · {sa.objective === "maximize_separation" ? "最大安全分离" : sa.objective === "balanced_coverage" ? "均衡覆盖" : "安全会合"}
+      {` · 目标间距 ${sa.metrics.target_separation.toFixed(2)} m · Nav2 总路径 ${sa.metrics.total_nav2_path_length.toFixed(2)} m`}
+      {` · ${sa.evidence.safe_candidate_count} 个安全候选点（0.40 m 采样，近似解）`}
+    </p>}
+    {fa && <p className="small">
+      {fa.success ? "空间目标验收通过" : "空间目标验收未通过"}
+      {fa.actual_separation != null ? ` · Gazebo 实测间距 ${fa.actual_separation.toFixed(2)} m` : ""}
+    </p>}
+    {plan.handoff_policy_reason && <p className="small">接替策略：{plan.handoff_policy_reason}</p>}
+    {(plan.steps?.length || plan.assignments?.length) ? <ol className="steps">
+      {(plan.steps || []).map((s) => <li key={s.id}>
+        <code>{s.id}</code> {s.description}
+        {s.x !== undefined && s.y !== undefined && <span className="muted"> ({s.x}, {s.y})</span>}
+      </li>)}
+      {(plan.assignments || []).flatMap((a) => a.steps.map((s) => <li key={a.robot_id + s.id}>
+        <code style={{ color: robotColor(a.robot_id) }}>{robotShort(a.robot_id)}</code> {s.description}
+      </li>))}
+    </ol> : null}
+    {(plan.handoffs || []).map((h) => <p className="small" key={h.handoff_run_id}>
+      接替 {robotShort(h.source_robot_id)} → {robotShort(h.target_robot_id)} · {legacyStatus[h.status] || h.status}
+      {h.final_gazebo_error != null ? ` · Gazebo 误差 ${h.final_gazebo_error.toFixed(3)} m` : ""}
+      <button className="link" onClick={() => onOpen(h.handoff_run_id)}>查看</button>
+    </p>)}
+    {!!plan.turns?.length && <details><summary>指令对话</summary>
+      {plan.turns.map((t, i) => <p key={i} className="small"><b>{t.role === "user" ? "你" : "Assistant"}：</b>{t.content}</p>)}
+    </details>}
+    {plan.run_ids[0] && <button className="link" onClick={() => onOpen(plan.run_ids[0])}>查看执行过程 ↓</button>}
+  </div>;
+}
+
 function App() {
-  const [data, setData] = useState<State | null>(null),
-    [connected, setConnected] = useState(false),
+  const { data, connected } = useLabState();
+  const [tab, setTab] = useState<"task" | "fault">("task"),
     [robot, setRobot] = useState("robot_1"),
     [selected, setSelected] = useState(""),
     [mode, setMode] = useState("ai"),
     [fault, setFault] = useState("scan_interrupted"),
-    [prompt, setPrompt] = useState(
-      "排查为什么机器人无法到达货架 A。请逐步收集现场证据，并验证修复效果。",
-    ),
+    [prompt, setPrompt] = useState("排查为什么机器人无法到达货架 A。请逐步收集现场证据，并验证修复效果。"),
     [repair, setRepair] = useState(true),
     [busy, setBusy] = useState(false),
-    [instruction, setInstruction] = useState(() => localStorage.getItem("rdl.plan") ? "" : "让机器人去货架 A"),
+    [instruction, setInstruction] = useState(() => (localStorage.getItem("rdl.plan") ? "" : "让机器人去货架 A")),
     [missionRepair, setMissionRepair] = useState(true),
     [fleetHandoff, setFleetHandoff] = useState(true),
     [missionScope, setMissionScope] = useState<"single" | "fleet">("single"),
@@ -281,23 +110,23 @@ function App() {
     [returnedPlan, setReturnedPlan] = useState<AssistantPlan | null>(null),
     [assistantError, setAssistantError] = useState(""),
     [notice, setNotice] = useState("");
+
   useEffect(() => {
-    const s = new EventSource("/api/events");
-    s.onmessage = (e) => {
-      setData(JSON.parse(e.data));
-      setConnected(true);
-    };
-    s.onerror = () => setConnected(false);
-    return () => s.close();
-  }, []);
-  useEffect(() => {
-    if (data?.robots.length && !data.robots.some((item) => item.id === robot)) {
-      setRobot(data.robots[0].id);
-    }
-  }, [data, robot, fault]);
-  const run = data?.runs.find((r) => r.id === selected) || data?.runs[0];
+    if (data?.robots.length && !data.robots.some((item) => item.id === robot)) setRobot(data.robots[0].id);
+  }, [data, robot]);
+
+  const runs = data?.runs || [];
+  const run = runs.find((r) => r.id === selected) || runs[0];
+  const live = runs.filter((r) => !isTerminal(r));
   const assistantPlan = data?.plans?.find((p) => p.id === planId) || returnedPlan;
   const clarifying = assistantPlan?.status === "needs_clarification";
+  const chosen = data?.robots.find((r) => r.id === robot);
+  const disabled = busy || !connected || chosen?.busy;
+
+  function open(id: string) {
+    setSelected(id);
+    document.getElementById("investigation")?.scrollIntoView({ behavior: "smooth" });
+  }
   function choosePlan(id: string) {
     setAssistantError("");
     setPlanId(id);
@@ -317,17 +146,11 @@ function App() {
     try {
       const r = await fetch(path, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Lab-Token": data.token,
-        },
+        headers: { "Content-Type": "application/json", "X-Lab-Token": data.token },
         body: JSON.stringify(body),
       });
       const d = await r.json();
-      if (!r.ok)
-        throw Error(
-          typeof d.detail === "string" ? d.detail : JSON.stringify(d.detail),
-        );
+      if (!r.ok) throw Error(typeof d.detail === "string" ? d.detail : JSON.stringify(d.detail));
       return d;
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
@@ -339,12 +162,7 @@ function App() {
     }
   }
   async function diagnose() {
-    const d = await post("/api/runs", {
-      robots: [robot],
-      mode,
-      prompt,
-      auto_repair: repair,
-    });
+    const d = await post("/api/runs", { robots: [robot], mode, prompt, auto_repair: repair });
     if (d) setSelected(d.run_ids[0]);
   }
   async function executeInstruction() {
@@ -359,13 +177,13 @@ function App() {
     try {
       const d = missionScope === "fleet"
         ? await post("/api/fleet/tasks", {
-            prompt: instruction, auto_repair: missionRepair, allow_handoff: fleetHandoff,
-          }, setAssistantError)
+          prompt: instruction, auto_repair: missionRepair, allow_handoff: fleetHandoff,
+        }, setAssistantError)
         : await post("/api/assistant/tasks", {
-            prompt: instruction, auto_repair: missionRepair,
-            parent_id: clarifying ? parentPlan?.id : null,
-            robot_id: clarifying ? parentPlan?.robot_id : robot,
-          }, setAssistantError);
+          prompt: instruction, auto_repair: missionRepair,
+          parent_id: clarifying ? parentPlan?.id : null,
+          robot_id: clarifying ? parentPlan?.robot_id : robot,
+        }, setAssistantError);
       if (d) {
         setPlanId(d.plan.id);
         localStorage.setItem("rdl.plan", d.plan.id);
@@ -377,495 +195,187 @@ function App() {
       setPlanning(false);
     }
   }
-  const chosen = data?.robots.find((r) => r.id === robot);
-  const disabled =
-    busy ||
-    !connected ||
-    chosen?.busy;
-  return (
-    <div className="shell">
-      <aside>
-        <a className="brand" href="/">
-          ◈
-          <span>
-            ROBOT
-            <br />
-            <b>DEBUG LAB</b>
-          </span>
-        </a>
-        <div className="nav active">
-          ◉ <span>调试工作台</span>
-        </div>
-        <a className="nav" href="#investigation">
-          ⌁ <span>实验与证据</span>
-          <small>{data?.runs.length || 0}</small>
-        </a>
-        <div className="aside-note">
-          LOCAL LAB / 01
-          <br />
-          ROS 2 Lyrical
-          <br />
-          <span>Gazebo + Nav2 仿真</span>
-        </div>
-        <div className="connection">
-          <i className={connected ? "on" : ""} />
-          {connected ? "实时连接正常" : "正在连接实验环境"}
-        </div>
-      </aside>
-      <main>
-        <header>
-          <div>
-            <div className="eyebrow">
-              EMBODIED AI / OBSERVE · DIAGNOSE · VERIFY
-            </div>
-            <h1>让每一次诊断，都有证据。</h1>
-            <p>从真实 ROS 2 状态出发，复现问题、验证假设、检验修复。</p>
-          </div>
-          <div className="environment">
-            <span className="pill">● 本地仿真</span>
-            <small>
-              {data?.model === "default" ? "OpenFang 默认模型" : data?.model || "模型连接中"}
-              <br />
-              ROS domain {data?.ros_domain || "—"}
-              <br />
-              调度后端：{data?.runtime === "openfang" ? "OpenFang" : "本地直连"}
-            </small>
-          </div>
-        </header>
-        <div className="robot-row">
-          {data?.robots.map((r, i) => (
-            <button
-              className={"robot-card " + (robot === r.id ? "selected" : "")}
-              key={r.id}
-              onClick={() => setRobot(r.id)}
-            >
-              <span className={"robot-icon r" + i}>↗</span>
-              <div>
-                <b>{r.id.replace("robot_", "Robot 0")}</b>
-                <span>
-                  {r.busy
-                    ? "任务执行中"
-                    : r.controller_alive
-                      ? "控制节点在线"
-                      : "控制节点离线"}
-                </span>
-              </div>
-              <div className="coords">
-                {r.pose
-                  ? `${r.pose.x.toFixed(2)}, ${r.pose.y.toFixed(2)}`
-                  : "—"}
-                <small>实时坐标</small>
-              </div>
-              <i className={r.controller_alive ? "on" : ""} />
-            </button>
-          ))}
-        </div>
-        {notice && (
-          <div role="status" className="notice">
-            {notice}
-            <button aria-label="关闭提示" onClick={() => setNotice("")}>×</button>
-          </div>
-        )}
-        <section className="panel command assistant-command">
-          <div className="panel-head">
-            <h2>Assistant 自然语言任务</h2>
-            <span>描述目标 → 自动分派 → 失败诊断 → 验收</span>
-          </div>
-          <div className="task-examples">
-            <button disabled={busy} onClick={() => newInstruction("让机器人去货架 A")}>导航示例</button>
-            <button disabled={busy} onClick={() => newInstruction()}>新建指令</button>
-          </div>
-          <label>任务范围</label>
-          <div className="segmented">
-            <button className={missionScope === "single" ? "chosen" : ""}
-              disabled={clarifying} onClick={() => setMissionScope("single")}>所选机器人</button>
-            <button className={missionScope === "fleet" ? "chosen" : ""}
-              disabled={clarifying} onClick={() => setMissionScope("fleet")}>车队协同 Agent</button>
-          </div>
-          <p className="hint">车队模式会查询两台机器人的实时位置和健康状态，再生成可审核的并行子任务。</p>
-          <label htmlFor="plan-history">指令历史（选择后只查看，不会再次执行）</label>
-          <select id="plan-history" value={planId} disabled={busy} onChange={(e) => choosePlan(e.target.value)}>
-            <option value="">新指令</option>
-            {(data?.plans || []).map((p) => <option value={p.id} key={p.id}>
-              {p.status === "needs_clarification" ? "待补充" : p.status === "dispatched" ? "已分派" : p.status === "continued" ? "已续接" : "未执行"} · {p.robot_id?.replace("robot_", "R0") || "R01"} · {(p.prompt || p.message || p.id).slice(0, 50)}
-            </option>)}
-          </select>
-          {clarifying && <p className="hint clarification-question">{assistantPlan.message}</p>}
-          <label htmlFor="instruction">{clarifying ? "补充信息（保留上文的机器人与要求）" : "告诉机器人去哪里"}</label>
-          <textarea id="instruction" value={instruction} maxLength={2000}
-            onChange={(e) => setInstruction(e.target.value)}
-            placeholder={missionScope === "fleet" ? "例如：让离货架 A 最近的机器人去检查，另一台去充电站等待" : "例如：让机器人去货架 A"} />
-          <label className="checkbox">
-            <input type="checkbox" checked={missionRepair && !(clarifying && assistantPlan.auto_repair_ceiling === false)}
-              disabled={clarifying && assistantPlan.auto_repair_ceiling === false}
-              onChange={(e) => setMissionRepair(e.target.checked)} />
-            导航失败后，允许执行限定修复并重试原目标
-          </label>
-          {missionScope === "fleet" && <label className="checkbox">
-            <input type="checkbox" checked={fleetHandoff}
-              onChange={(e) => setFleetHandoff(e.target.checked)} />
-            一台机器人仍无法完成时，允许健康机器人接替剩余可迁移步骤
-          </label>}
-          <button className="primary" onClick={executeInstruction}
-            disabled={busy || planning || !connected || !instruction.trim()}>
-            {planning ? "Assistant 正在解析任务…" : clarifying ? "补充并继续" : "解析并执行任务"}
-          </button>
-          <p className="hint">新指令只有点击上方按钮才会执行；历史下拉框只展示过去的计划。导航失败后，AI 会调查真实 ROS 状态。</p>
-          {assistantError && <div className="assistant-result assistant-error" role="alert">
-            <b>本次任务未分派</b>
-            <p>{assistantError}</p>
-            <small>机器人没有收到运动命令；可以修改指令后重试。</small>
-          </div>}
-          {assistantPlan && <div className="assistant-result" role="status">
-            <b>{assistantPlan.run_ids.length ? "已分派任务" : clarifying ? "请补充指令" : assistantPlan.status === "not_executable" ? "当前任务不可执行" : assistantPlan.status === "continued" ? "已由后续补充指令接续" : "计划未执行"} · {assistantPlan.plan_type === "fleet" ? "车队 Agent" : assistantPlan.robot_id?.replace("robot_", "Robot 0") || "Robot 01"}</b>
-            <p>{assistantPlan.message}</p>
-            {!!assistantPlan.suggested_requests?.length && <div>
-              <small>可执行替代指令：</small>
-              {assistantPlan.suggested_requests.map((item) => <p key={item}>· {item}</p>)}
-            </div>}
-            {assistantPlan.spatial_analysis && <div className="spatial-evidence">
-              <p><b>空间分析证据</b> · {
-                assistantPlan.spatial_analysis.objective === "maximize_separation" ? "最大安全分离"
-                  : assistantPlan.spatial_analysis.objective === "balanced_coverage" ? "均衡区域覆盖"
-                    : "安全会合"
-              }</p>
-              <p>
-                目标间距 {assistantPlan.spatial_analysis.metrics.target_separation.toFixed(2)} m
-                {` · 安全间距 ${assistantPlan.spatial_analysis.metrics.requested_clearance.toFixed(2)} m`}
-                {` · Nav2 总路径 ${assistantPlan.spatial_analysis.metrics.total_nav2_path_length.toFixed(2)} m`}
-              </p>
-              <small>
-                Nav2 实际占据地图 {assistantPlan.spatial_analysis.evidence.map}
-                {` · ${assistantPlan.spatial_analysis.evidence.safe_candidate_count} 个安全候选点`}
-                {` · ${assistantPlan.spatial_analysis.evidence.route_validation}`}
-              </small>
-              <p className="hint">按 0.40 m 间隔采样并限量验证候选点，结果为近似站位方案，不保证全地图最优；覆盖表示双机分散站位，尚不包含巡逻或检测。</p>
-            </div>}
-            {assistantPlan.fleet_acceptance && <div className="spatial-evidence">
-              <p><b>{assistantPlan.fleet_acceptance.success ? "空间目标验收通过" : "空间目标验收未通过"}</b></p>
-              {assistantPlan.fleet_acceptance.actual_separation != null && <p>
-                Gazebo 实测间距 {assistantPlan.fleet_acceptance.actual_separation.toFixed(2)} m
-                {assistantPlan.fleet_acceptance.target_separation != null
-                  ? ` · 目标 ${assistantPlan.fleet_acceptance.target_separation.toFixed(2)} m` : ""}
-              </p>}
-              <small>验收来源：Gazebo 独立里程计真值</small>
-            </div>}
-            {assistantPlan.handoff_policy_reason && <p className="hint">接替策略：{assistantPlan.handoff_policy_reason}</p>}
-            {!!assistantPlan.turns?.length && <details><summary>查看指令对话</summary>
-              {assistantPlan.turns.map((t, i) => <p key={i}><b>{t.role === "user" ? "你" : "Assistant"}：</b>{t.content}</p>)}
-            </details>}
-            {(assistantPlan.steps || []).map((step) => <p key={step.id}>
-              {step.id} · {step.description}
-              {step.x !== undefined && step.y !== undefined ? ` → (${step.x}, ${step.y})` : ""}
-              {assistantPlan.run_ids[0] && <button className="quiet" onClick={() => {
-                setSelected(assistantPlan.run_ids[0]);
-                document.getElementById("investigation")?.scrollIntoView({ behavior: "smooth" });
-              }}>查看执行结果</button>}
-            </p>)}
-            {(assistantPlan.assignments || []).map((assignment) => <div key={assignment.robot_id}>
-              <p><b>{assignment.robot_id.replace("robot_", "Robot 0")}</b> · {assignment.rationale}</p>
-              {assignment.steps.map((step) => <p key={`${assignment.robot_id}-${step.id}`}>
-                {step.id} · {step.description}
-                {step.x !== undefined && step.y !== undefined ? ` → (${step.x}, ${step.y})` : ""}
-              </p>)}
-            </div>)}
-            {(assistantPlan.handoffs || []).map((handoff) => <p key={handoff.handoff_run_id}>
-              接替 · {handoff.source_robot_id.replace("robot_", "Robot 0")} → {handoff.target_robot_id.replace("robot_", "Robot 0")}
-              {` · ${labels[handoff.status] || handoff.status}`}
-              {handoff.final_gazebo_error != null ? ` · Gazebo 误差 ${handoff.final_gazebo_error.toFixed(3)} m` : ""}
-              <button className="quiet" onClick={() => {
-                setSelected(handoff.handoff_run_id);
-                document.getElementById("investigation")?.scrollIntoView({ behavior: "smooth" });
-              }}>查看接替结果</button>
-            </p>)}
-            <small>规划后端：{(assistantPlan.usage?.prompt_tokens || 0) + (assistantPlan.usage?.completion_tokens || 0) === 0 ? "确定性解析（未调用模型）" : "模型结构化规划"} · tokens：{(assistantPlan.usage?.prompt_tokens || 0) + (assistantPlan.usage?.completion_tokens || 0)}</small>
-          </div>}
-        </section>
-        <div className="workspace">
-          <section className="panel scene">
-            <div className="panel-head">
-              <h2>运行现场</h2>
-              <span>
-                <i className={connected ? "on" : ""} /> LIVE
-              </span>
-            </div>
-            <Scene robots={data?.robots || []} activeTargets={data?.active_targets || {}} />
-            <div className="legend">
-              {(data?.robots || []).map((item, index) => <span key={item.id}>
-                <i className={"dot " + (index ? "amber" : "mint")} /> {item.id.replace("robot_", "Robot 0")}
-              </span>)}
-              <small>
-                Gazebo 里程计轨迹 · 虚线圈仅表示当前执行目标，历史目标不显示
-                {chosen?.localization?.position_error != null
-                  ? ` · 当前所选机器人 AMCL/Gazebo 偏差 ${chosen.localization.position_error.toFixed(2)} m`
-                  : ""}
-              </small>
-            </div>
-            <p className="hint">
+
+  return <>
+    <header className="topbar">
+      <a className="brand" href="/">Robot Debug Lab</a>
+      <nav>
+        <a href="#scene">现场</a>
+        <a href="#investigation">调查记录 <small>{runs.length}</small></a>
+        <a href="#experiment">实验</a>
+        <a href="#source-case">源码案例</a>
+      </nav>
+      <div className="env">
+        <span className={"conn " + (connected ? "on" : "")}>{connected ? "实时连接正常" : "正在连接实验环境"}</span>
+        <span>Gazebo + Nav2 仿真</span>
+        <span>ROS domain {data?.ros_domain || "—"}</span>
+        <span>{data?.runtime === "openfang" ? "OpenFang" : "直连"} · {data?.model === "default" ? "默认模型" : data?.model || "—"}</span>
+      </div>
+    </header>
+
+    <main>
+      <section className="intro">
+        <h1>导航失败时，让 Agent 查证据；<br />能不能修，由确定性程序决定。</h1>
+        <p>两台 TurtleBot3 在 Gazebo 仓库中执行真实 Nav2 任务。Agent 只读调查 ROS 现场并引用证据；
+          修复必须通过白名单和新鲜复测；结果以 Gazebo 真值独立验收。</p>
+      </section>
+
+      {notice && <div role="status" className="notice">
+        {notice}<button aria-label="关闭提示" onClick={() => setNotice("")}>×</button>
+      </div>}
+
+      <div className="stage">
+        <section id="scene" className="field">
+          <div className="field-head">
+            <h2>现场 <small>Nav2 占据栅格 · Gazebo 里程计</small></h2>
+            <span className="muted small">
               路线协调：{data?.traffic?.active.length || 0} 条已占用 · {data?.traffic?.queued || 0} 条等待
-              {data?.traffic ? ` · 中心安全间距 ${data.traffic.clearance.toFixed(2)} m` : ""}
-            </p>
-            <div className="fault-box">
-              <div>
-                <b>故障实验</b>
-                <small>故障标签不进入诊断 Agent 上下文</small>
-              </div>
-              <select
-                aria-label="故障类型"
-                value={fault}
-                onChange={(e) => setFault(e.target.value)}
-              >
-                {Object.entries(causes)
-                  .filter(([key]) => !["healthy", "unknown"].includes(key))
-                  .map(([k, v]) => (
-                    <option value={k} key={k}>
-                      {v}
-                    </option>
-                  ))}
-              </select>
-              <button
-                disabled={disabled}
-                onClick={async () => {
-                  if (await post(`/api/robots/${robot}/fault`, { kind: fault }))
-                    setNotice("已注入故障。点击「开始诊断」运行完整闭环。");
-                }}
-              >
-                注入故障
-              </button>
-              <button
-                className="quiet"
-                disabled={disabled}
-                onClick={async () => {
-                  if (await post(`/api/robots/${robot}/reset`))
-                    setNotice("共享Gazebo世界已重置，两台机器人均恢复到各自起点。");
-                }}
-              >
-                重置
-              </button>
-            </div>
-          </section>
-          <section className="panel command">
-            <div className="panel-head">
-              <h2>故障诊断实验 · 目标货架 A (2, 0.5)</h2>
-              <span className="mini">失败 → 调查 → 修复 → 重放</span>
-            </div>
-            <label htmlFor="diagnostic-robot">调查对象</label>
-            <select id="diagnostic-robot" value={robot} onChange={(e) => setRobot(e.target.value)}>
-              {(data?.robots || []).map((item) => <option value={item.id} key={item.id}>{item.id.replace("robot_", "Robot 0")}</option>)}
-            </select>
-            <label>诊断模式</label>
-            <div className="segmented">
-              <button
-                className={mode === "ai" ? "chosen" : ""}
-                onClick={() => setMode("ai")}
-              >
-                模型 AI
-              </button>
-              <button
-                className={mode === "rules" ? "chosen" : ""}
-                onClick={() => setMode("rules")}
-              >
-                规则基线
-              </button>
-            </div>
-            <label htmlFor="request">你想排查什么？</label>
-            <textarea
-              id="request"
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              maxLength={2000}
-            />
-            <label className="checkbox">
-              <input
-                type="checkbox"
-                checked={repair}
-                onChange={(e) => setRepair(e.target.checked)}
-              />{" "}
-              在仿真中执行限定修复并回归
-            </label>
-            <button
-              className="primary"
-              disabled={
-                disabled ||
-                !prompt.trim() ||
-                (mode === "ai" && !data?.ai_configured)
-              }
-              onClick={diagnose}
-            >
-              {busy ? "正在提交…" : "开始诊断"} <span aria-hidden="true">↗</span>
-            </button>
-            <button
-              className="quiet wide"
-              disabled={disabled}
-              onClick={async () => {
-                const d = await post(`/api/robots/${robot}/navigate`);
-                if (d)
-                  setNotice(
-                    d.success
-                      ? "移动任务通过位置验收"
-                      : `移动失败：${d.message}`,
-                  );
-              }}
-            >
-              仅执行目标点任务
-            </button>
-            <p className="hint">
-              AI 选择调查工具；程序验证修复结果。规则模式不调用模型。
-            </p>
-          </section>
-        </div>
-        <section id="investigation" className="panel investigation">
-          <div className="panel-head">
-            <h2>
-              调试任务 <small>TRACE & EVIDENCE</small>
-            </h2>
-            {run && (
-              <div className="actions">
-                <span className={"status " + run.status}>
-                  {labels[run.status] || run.status}
-                </span>
-                <a href={`/api/runs/${run.id}/export`}>导出 JSON ↗</a>
-                {active(run) && (
-                  <button disabled={busy} onClick={async () => {
-                    const result = await post(`/api/runs/${run.id}/cancel`);
-                    if (result) setNotice(result.accepted ? "已请求取消，正在停止任务并释放机器人。" : "该任务已结束，无需取消。");
-                  }}>
-                    取消任务
-                  </button>
-                )}
-              </div>
-            )}
+              {data?.traffic ? ` · 安全间距 ${data.traffic.clearance.toFixed(2)} m` : ""}
+            </span>
           </div>
-          <div className="investigation-body">
-            <div className="run-list">
-              {data?.runs.length ? (
-                data.runs.map((r) => (
-                  <button
-                    key={r.id}
-                    onClick={() => setSelected(r.id)}
-                    className={run?.id === r.id ? "current" : ""}
-                  >
-                    <b>
-                      {r.robot_id.replace("robot_", "Robot 0")}{" "}
-                      <em>{r.mode === "ai" ? "AI" : "RULE"}</em>
-                    </b>
-                    <span>{labels[r.status] || r.status}</span>
-                    <small>
-                      {new Date(r.created * 1000).toLocaleTimeString()} ·{" "}
-                      {r.id.slice(0, 6)}
-                    </small>
-                  </button>
-                ))
-              ) : (
-                <p className="empty-small">还没有调试记录</p>
-              )}
-            </div>
-            <div className="run-detail">
-              {!run ? (
-                <div className="empty">
-                  <div>⌁</div>
-                  <h3>从一个可复现的问题开始</h3>
-                  <p>
-                    选择机器人，注入一种故障，再开始诊断。
-                    <br />
-                    工具调用、证据和回归结果将在这里逐步出现。
-                  </p>
-                </div>
-              ) : (
-                <>
-                  <div className="metrics">
-                    <div>
-                      <small>修复前 · 原始任务</small>
-                      <b>
-                        {run.baseline
-                          ? run.baseline.success
-                            ? "通过"
-                            : "未到达"
-                          : "等待复现"}
-                      </b>
-                    </div>
-                    <div>
-                      <small>Gazebo 独立位置误差 · 通过阈值 &lt; 0.35</small>
-                      <b>
-                        {run.validation
-                          ? `${run.validation.error.toFixed(3)}`
-                          : "—"}
-                      </b>
-                    </div>
-                    <div>
-                      <small>诊断 tokens</small>
-                      <b>
-                        {run.usage.prompt_tokens + run.usage.completion_tokens}
-                      </b>
-                    </div>
-                    <div>
-                      <small>证据与事件</small>
-                      <b>{run.events.length}</b>
-                    </div>
-                  </div>
-                  <div className="diagnosis" role="status">
-                    <span>本次任务结果 · {run.backend || run.mode}</span>
-                    <p>{run.robot_id} → 目标 ({(run.target || [2, 0.5]).join(", ")})</p>
-                    <p>{run.status === "verified"
-                      ? run.baseline?.success
-                        ? "原始任务已到达目标，本次验证通过。"
-                        : "修复前未到达 → 已执行修复 → 复测到达目标，验证通过。"
-                      : run.status === "diagnosed"
-                        ? "已完成诊断，未开启自动修复。"
-                        : `当前状态：${labels[run.status] || run.status}，尚未确认任务恢复。`}</p>
-                    <small>{run.baseline?.success
-                      ? "首次执行已通过位置验收，无需修复。"
-                      : "首次执行的失败记录会保留；最终结果请看本栏和时间线中的独立位置验收。"}</small>
-                  </div>
-                  {run.plan && <div className="diagnosis">
-                    <span>Assistant 分派记录</span>
-                    <p>{run.plan.message}</p>
-                    <small>规划用量独立记录，不计入上方诊断 tokens：{(run.plan.usage?.prompt_tokens || 0) + (run.plan.usage?.completion_tokens || 0)}</small>
-                  </div>}
-                  {run.diagnosis && (
-                    <div className="diagnosis">
-                      <span>诊断结论 / {causes[run.diagnosis.cause]}</span>
-                      <p>{run.diagnosis.summary}</p>
-                      <small>{run.diagnosis.repair_rationale}</small>
-                      <div>
-                        {run.diagnosis.evidence_ids.map((id) => (
-                          <a key={id} href={"#" + run.id + id}>
-                            {id}
-                          </a>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {run.error && <p className="error">{run.error}</p>}
-                  <div className="timeline">
-                    {run.events.map((e) => (
-                      <details id={run.id + e.id} key={e.id}>
-                        <summary>
-                          <span className={"event-dot " + e.kind} />
-                          <code>{e.id}</code>
-                          <b>{e.title}</b>
-                          <time>
-                            {new Date(e.time * 1000).toLocaleTimeString()}
-                          </time>
-                        </summary>
-                        <pre>
-                          {JSON.stringify(e.data, null, 2) || "事件已记录"}
-                        </pre>
-                      </details>
-                    ))}
-                  </div>
-                </>
-              )}
-            </div>
+          <div className="map"><Scene robots={data?.robots || []} activeTargets={data?.active_targets || {}} selected={robot} /></div>
+          <div className="robots">
+            {(data?.robots || []).map((r) => {
+              const current = live.find((x) => x.robot_id === r.id);
+              return <button key={r.id} className={"robot-card " + (robot === r.id ? "selected" : "")}
+                style={{ "--c": robotColor(r.id) } as React.CSSProperties} onClick={() => setRobot(r.id)}>
+                <span className="swatch" />
+                <span className="rc-name"><b>{robotName(r.id)}</b>
+                  <small>{r.controller_alive ? "控制节点在线" : "控制节点离线"}</small></span>
+                <span className="rc-pose mono">{r.pose ? `${r.pose.x.toFixed(2)}, ${r.pose.y.toFixed(2)}` : "—"}</span>
+                <span className="rc-meta small">
+                  雷达 {r.scan ? `${r.scan.raw_scan_hz.toFixed(0)}→${r.scan.nav2_scan_hz.toFixed(0)} Hz` : "—"}
+                  {" · "}AMCL {r.localization?.position_error != null ? `${r.localization.position_error.toFixed(2)} m` : "—"}
+                </span>
+                {current ? <PhaseBadge phase={phaseOf(current)} /> : <span className="phase muted">空闲</span>}
+              </button>;
+            })}
           </div>
         </section>
-        <SourceCase />
-        <footer>
-          ROBOT DEBUG LAB{" "}
-          <span>Gazebo 现场 · Nav2 导航 · AI 调查 · 受限修复 · 独立验收</span>
-        </footer>
-      </main>
-    </div>
-  );
+
+        <section className="console">
+          <div className="tabs" role="tablist">
+            <button role="tab" aria-selected={tab === "task"} className={tab === "task" ? "on" : ""}
+              onClick={() => setTab("task")}>自然语言任务</button>
+            <button role="tab" aria-selected={tab === "fault"} className={tab === "fault" ? "on" : ""}
+              onClick={() => setTab("fault")}>故障实验</button>
+          </div>
+
+          {tab === "task" ? <div className="pane">
+            <div className="segmented">
+              <button className={missionScope === "single" ? "chosen" : ""} disabled={clarifying}
+                onClick={() => setMissionScope("single")}>所选机器人</button>
+              <button className={missionScope === "fleet" ? "chosen" : ""} disabled={clarifying}
+                onClick={() => setMissionScope("fleet")}>车队协同 Agent</button>
+            </div>
+            <div className="row-actions">
+              <button className="chip" disabled={busy} onClick={() => newInstruction("让机器人去货架 A")}>导航示例</button>
+              <button className="chip" disabled={busy} onClick={() => newInstruction()}>新建指令</button>
+            </div>
+            {clarifying && <p className="callout warn small">{assistantPlan.message}</p>}
+            <label htmlFor="instruction">{clarifying ? "补充信息（保留上文的机器人与要求）"
+              : missionScope === "fleet" ? "告诉车队要做什么" : `告诉 ${robotName(robot)} 去哪里`}</label>
+            <textarea id="instruction" value={instruction} maxLength={2000} rows={3}
+              onChange={(e) => setInstruction(e.target.value)}
+              placeholder={missionScope === "fleet" ? "例如：让离货架 A 最近的机器人去检查，另一台去充电站等待" : "例如：让机器人去货架 A"} />
+            <label className="checkbox">
+              <input type="checkbox" checked={missionRepair && !(clarifying && assistantPlan.auto_repair_ceiling === false)}
+                disabled={clarifying && assistantPlan.auto_repair_ceiling === false}
+                onChange={(e) => setMissionRepair(e.target.checked)} />
+              导航失败后，允许执行限定修复并重试原目标
+            </label>
+            {missionScope === "fleet" && <label className="checkbox">
+              <input type="checkbox" checked={fleetHandoff} onChange={(e) => setFleetHandoff(e.target.checked)} />
+              一台机器人仍无法完成时，允许健康机器人接替剩余可迁移步骤
+            </label>}
+            <button className="primary" onClick={executeInstruction}
+              disabled={busy || planning || !connected || !instruction.trim()}>
+              {planning ? "Assistant 正在解析任务…" : clarifying ? "补充并继续" : "解析并执行任务"}
+            </button>
+            {assistantError && <div className="callout bad" role="alert">
+              <b>本次任务未分派</b><p>{assistantError}</p><small>机器人没有收到运动命令。</small>
+            </div>}
+            {assistantPlan && <PlanResult plan={assistantPlan} onOpen={open} />}
+            <label htmlFor="plan-history">指令历史（选择后只查看，不会再次执行）</label>
+            <select id="plan-history" value={planId} disabled={busy} onChange={(e) => choosePlan(e.target.value)}>
+              <option value="">新指令</option>
+              {(data?.plans || []).map((p) => <option value={p.id} key={p.id}>
+                {p.status === "needs_clarification" ? "待补充" : p.status === "dispatched" ? "已分派" : p.status === "continued" ? "已续接" : "未执行"}
+                {" · "}{robotShort(p.robot_id)} · {(p.prompt || p.message || p.id).slice(0, 40)}
+              </option>)}
+            </select>
+          </div> : <div className="pane">
+            <p className="small muted">向 {robotName(robot)} 注入故障，再让它去货架 A (2, 0.5)。
+              故障标签不进入 Agent 上下文，只写入私有评测表。</p>
+            <label htmlFor="fault">1 · 注入故障</label>
+            <div className="inline">
+              <select id="fault" aria-label="故障类型" value={fault} onChange={(e) => setFault(e.target.value)}>
+                {FAULTS.map((k) => <option value={k} key={k}>
+                  {causes[k]}{k === "transform_updates_stopped" ? "（未见，无白名单修复）" : ""}
+                </option>)}
+              </select>
+              <button disabled={disabled} onClick={async () => {
+                if (await post(`/api/robots/${robot}/fault`, { kind: fault })) setNotice("已注入故障，现在开始诊断。");
+              }}>注入</button>
+              <button className="quiet" disabled={disabled} onClick={async () => {
+                if (await post(`/api/robots/${robot}/reset`)) setNotice("Gazebo 世界已重置，两台机器人回到起点。");
+              }}>重置</button>
+            </div>
+            <label>2 · 诊断策略</label>
+            <div className="segmented">
+              <button className={mode === "ai" ? "chosen" : ""} onClick={() => setMode("ai")}>模型 AI</button>
+              <button className={mode === "rules" ? "chosen" : ""} onClick={() => setMode("rules")}>规则基线</button>
+            </div>
+            <label htmlFor="request">3 · 排查请求</label>
+            <textarea id="request" rows={3} value={prompt} maxLength={2000} onChange={(e) => setPrompt(e.target.value)} />
+            <label className="checkbox">
+              <input type="checkbox" checked={repair} onChange={(e) => setRepair(e.target.checked)} />
+              授权通过时执行白名单修复并重放原目标
+            </label>
+            <button className="primary" disabled={disabled || !prompt.trim() || (mode === "ai" && !data?.ai_configured)}
+              onClick={diagnose}>{busy ? "正在提交…" : "开始诊断"}</button>
+            <button className="quiet wide" disabled={disabled} onClick={async () => {
+              const d = await post(`/api/robots/${robot}/navigate`);
+              if (d) setNotice(d.success ? "移动任务通过位置验收" : `移动失败：${d.message}`);
+            }}>仅执行目标点任务</button>
+          </div>}
+        </section>
+      </div>
+
+      <section id="investigation" className="block">
+        <div className="block-head">
+          <div><span className="kicker">调查记录</span><h2>每一步都能追到证据编号</h2></div>
+          {run && !isTerminal(run) && <button disabled={busy} onClick={async () => {
+            const result = await post(`/api/runs/${run.id}/cancel`);
+            if (result) setNotice(result.accepted ? "已请求取消，正在停止任务并释放机器人。" : "该任务已结束。");
+          }}>取消当前任务</button>}
+        </div>
+        <div className="investigation">
+          <ul className="run-list">
+            {runs.length ? runs.map((r) => <li key={r.id}>
+              <button className={run?.id === r.id ? "current" : ""} onClick={() => setSelected(r.id)}>
+                <span className="rl-top">
+                  <i style={{ background: robotColor(r.robot_id) }} />
+                  <b>{robotShort(r.robot_id)}</b>
+                  <span className="muted">{r.diagnosis?.strategy ? strategies[r.diagnosis.strategy] : r.mode === "ai" ? "AI" : "规则"}</span>
+                  <time>{clock(r.created)}</time>
+                </span>
+                <PhaseBadge phase={phaseOf(r)} />
+              </button>
+            </li>) : <li className="muted small">还没有运行记录</li>}
+          </ul>
+          {run ? <RunDetail run={run} /> : <div className="empty">
+            <h3>从一个可复现的问题开始</h3>
+            <p>在「故障实验」中注入故障并开始诊断，工具调用、证据和验收结果会出现在这里。</p>
+          </div>}
+        </div>
+      </section>
+
+      <Experiment />
+      <SourceCase />
+    </main>
+    <footer>Robot Debug Lab · Gazebo 现场 · Nav2 导航 · Agent 调查 · 受限修复 · 独立验收</footer>
+  </>;
 }
+
 createRoot(document.getElementById("root")!).render(<App />);

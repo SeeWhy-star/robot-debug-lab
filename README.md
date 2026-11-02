@@ -4,7 +4,7 @@ English | [简体中文](README.zh-CN.md)
 
 An evidence-driven ROS 2 incident investigation lab built on **Gazebo Sim, Nav2 and OpenFang**.
 
-Two TurtleBot3 robots execute real, namespaced Nav2 goals in one repository-owned Gazebo warehouse. The walls, five racks, Shelf A, charging pad and crate are simulator entities, while both Nav2 stacks consume a matching occupancy grid and the dashboard overlays independent live odometry on that same map. The lab can interrupt either robot's guarded laser path between Gazebo's raw `scan` and Nav2's `scan_faulted` input. The AI never receives the injected label: it must inspect live ROS nodes, sensor rates, parameters and motion, cite recorded evidence, and request an allowlisted recovery. The original goal is then replayed and independently accepted against Gazebo odometry.
+Two TurtleBot3 robots execute real, namespaced Nav2 goals in one repository-owned Gazebo warehouse. The walls, five racks, Shelf A, charging pad and crate are simulator entities, while both Nav2 stacks consume a matching occupancy grid and the dashboard overlays independent live odometry on that same map. For known incidents, the AI never receives the injected label: it must inspect live ROS nodes, sensor rates, parameters and motion, cite recorded evidence, and request an allowlisted recovery. For an unseen mechanism it may instead report `unknown_fault`, a suspected subsystem and cited evidence. A separate deterministic authorizer rechecks fresh server-side state before any repair; unsupported diagnoses are escalated without mutation.
 
 ## What the AI actually does
 
@@ -14,8 +14,8 @@ Two TurtleBot3 robots execute real, namespaced Nav2 goals in one repository-owne
 - Multi-stop requests can resolve all named places in one authoritative batch call; duplicate observations are rejected to bound tool use.
 - The gateway validates cross-step invariants, including requiring charging-station arrival immediately before simulated charging.
 - Unsupported intents such as pickup return no executable steps and a grounded alternative; a follow-up is replanned with the full clarification history.
-- A diagnostic agent chooses read-only tools and produces a structured conclusion with real evidence IDs.
-- A deterministic gateway checks fresh evidence before applying the matching allowlisted repair.
+- A diagnostic agent chooses read-only tools and produces a structured conclusion with real evidence IDs. Its conclusion may be a known fault, an unknown fault with a suspected subsystem, insufficient evidence, or a healthy result.
+- A deterministic gateway checks fresh evidence before applying the matching allowlisted repair. Unknown and insufficient diagnoses are never repaired automatically.
 - Localization incidents are diagnosed from measured AMCL-versus-Gazebo divergence; the simulation-only repair may reseed AMCL from verified Gazebo truth before replaying the original goal.
 - When the stack is healthy but a reviewed semantic approach fails in execution, a separate Agent may select only a Nav2-verified alternative approach while completed and later mission steps remain unchanged.
 - Nav2 remains responsible for planning and control; the model never publishes velocity commands.
@@ -28,6 +28,8 @@ Two TurtleBot3 robots execute real, namespaced Nav2 goals in one repository-owne
 - Saved fleet plans can be replayed in AI and rules modes only after semantic targets are revalidated against the current scene registry. This keeps assignments identical in controlled comparisons and rejects stale poses or model-invented coordinates.
 
 Local end-to-end acceptance on 2026-10-29 completed the same laser incident in both modes. The rules baseline finished with 0 tokens and 0.1816 m final error. The OpenFang AI run produced 11 recorded events, consumed 12132 provider-reported tokens, and finished with 0.2536 m final error. See the committed [acceptance summary](docs/nav2-acceptance-results.json).
+
+The frozen-prompt unseen-fault experiment disables AMCL's real `tf_broadcast` parameter while AMCL and `bt_navigator` remain active. Across two trials per strategy, rules localized the TF subsystem 0/2 times, an LLM without investigation tools did so 1/2 times, and the tool-using LLM did so 2/2 times. The no-tools model also requested one incorrect known repair, which the deterministic authorizer denied; no incorrect repair executed. This is a six-run controlled demonstration, not a general accuracy claim. The tool set already included a generic TF inspection tool, and the OpenFang endpoint exposed only the model alias `default`. See the [experiment report](docs/experiments/unseen-transform-ablation.md) and [raw JSON](docs/experiments/unseen-transform-ablation.json).
 
 ## Quick start
 
@@ -49,6 +51,14 @@ bash scripts/start_all.sh
 Open <http://127.0.0.1:8765>. Use `RDL_NATIVE_GUI=1 bash scripts/start_all.sh` to show Gazebo and RViz. Configure either a direct compatible model or `RDL_AGENT_BACKEND=openfang` in `.env`; see [OpenFang setup](docs/openfang.md).
 Stop the complete project stack from any terminal with `bash scripts/stop_all.sh`. The command validates process ownership and command lines before stopping the launcher, dashboard, project-local OpenFang, Gazebo and Nav2; `--dry-run` only shows the matching processes.
 
+If a shell proxy incorrectly captures loopback traffic, fix its local bypass or use a one-run override without changing project files:
+
+```bash
+env -u ALL_PROXY -u all_proxy \
+  NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost \
+  RDL_NATIVE_GUI=1 bash scripts/start_all.sh
+```
+
 Run the live incident acceptance against a running server:
 
 ```bash
@@ -68,6 +78,9 @@ Run the live incident acceptance against a running server:
 .venv/bin/python scripts/evaluate_mission_faults.py --fault all --mode both --trials 3 --resume
 # Reproduce only the fourth localization mechanism
 .venv/bin/python scripts/evaluate_fault_matrix.py --fault localization_drift --mode both
+# Reproduce the unseen transform mechanism without an Agent, then run the small ablation
+.venv/bin/python scripts/reproduce_transform_fault.py --trials 3
+.venv/bin/python scripts/evaluate_diagnostic_ablation.py --trials-per-strategy 2
 ```
 
 ## Architecture
@@ -93,7 +106,7 @@ flowchart LR
   Replay --> Odom[Gazebo odometry verdict]
 ```
 
-The dashboard includes mission input, the actual 2-D Nav2 occupancy map with live warehouse telemetry, controlled fault injection, evidence timelines, rules/AI comparison, JSON export, and a separate real-source repair case. Start with `RDL_NATIVE_GUI=1 bash scripts/start_all.sh` to inspect the native 3-D Gazebo world and RViz alongside the dashboard.
+The light dashboard puts the actual 2-D Nav2 occupancy map, both robots and route reservations next to natural-language tasks and controlled fault injection. Run details render the contract-v2 phase progression, cited evidence, diagnostic recommendation, deterministic authorization, Nav2 attempts and Gazebo verdict as separate records. A labeled-only experiment panel compares rules, an LLM without tools and a tool-using LLM while showing the small sample size and excluded demo runs. Legacy mission and fleet events remain visible through generic timeline cards. Start with `RDL_NATIVE_GUI=1 bash scripts/start_all.sh` to inspect the native 3-D Gazebo world and RViz alongside the dashboard; 3-D Gazebo is not embedded in the page.
 
 A live mission acceptance covers the previous failure phrase `机器人去实体障碍箱回来后去充电`: OpenFang resolves real scene objects, the gateway binds reviewed approach poses, and Nav2 executes the resulting crate → start → charging-station mission. The same acceptance verifies that `去货架 A 拿货，然后去充电` remains a clarification with no robot run because this TurtleBot3 has no pickup capability.
 
@@ -109,9 +122,11 @@ A fourth mechanism now corrupts AMCL through the real `/initialpose` interface w
 
 **Phase 1 backend is complete:** zero-token atomic routing, tool-grounded ReAct planning, an authoritative semantic scene, ordered multi-step execution, contextual clarification, capability negotiation, observable simulated charging, cancellation, and independent acceptance are implemented. Evidence-grounded recovery from a blocked semantic approach is also working end to end.
 
-**Phase 2 backend is complete:** four distinct ROS/Nav2 failures, AI-versus-rules comparison, mid-mission recovery, automated evaluation, and combined system-plus-route recovery are implemented. The original three-mechanism matrix passed 18 live runs; localization drift additionally passed direct and ordered-mission AI/rules comparisons. Costmap-derived candidate generation, general conditional task graphs, restart resumption, and physical manipulation remain later extensions.
+**Phase 2 backend is complete:** four allowlisted ROS/Nav2 failures, AI-versus-rules comparison, mid-mission recovery, automated evaluation, and combined system-plus-route recovery are implemented. A fifth, non-allowlisted transform-publication failure exercises unknown-fault diagnosis and deterministic escalation. The original three-mechanism matrix passed 18 live runs; localization drift additionally passed direct and ordered-mission AI/rules comparisons. The unseen-fault ablation is intentionally small and does not establish general diagnostic accuracy. Costmap-derived candidate generation, general conditional task graphs, restart resumption, and physical manipulation remain later extensions.
 
 **Phase 3 backend is complete:** two physical Gazebo robot entities now run independent namespaced sensor, TF, AMCL and Nav2 stacks in one shared world. An OpenFang fleet Agent queries live fleet state and semantic destinations, proposes assignments, and the deterministic workflow atomically starts both missions. Per-robot faults remain isolated, portable unfinished steps can be handed to the verified peer, and crossing Nav2 routes use bounded full-route reservations. A reservation timeout is recorded and can trigger deterministic reassignment instead of waiting forever. The committed [repeatable fleet matrix](docs/fleet-evaluation-results.json) passed 36/36 live cases: six scenarios, three trials, and AI/rules comparison using one validated plan per scenario and trial. It covers parallel work, crossing traffic, timeout handoff, scan recovery, lifecycle recovery and unrepaired-fault handoff, with independent Gazebo acceptance, model tools on every AI fault run, zero wrong repairs and zero global traffic fallbacks. Three subsequent live spatial acceptances verified [maximum separation](docs/spatial-fleet-acceptance-results.json), [safe rendezvous](docs/spatial-rendezvous-results.json), and [balanced static coverage](docs/spatial-coverage-results.json). OpenFang selected the correct map-analysis objective for each natural-language request; all six robot runs verified, and Gazebo measured final separations of 8.220 m, 0.995 m, and 3.680 m respectively. Time-aware MAPF, fleets larger than two robots and physical-fleet safety remain research extensions outside this phase.
+
+**Dashboard refresh is complete:** the previous single-file interface is split into typed scene, run-detail and experiment components with a light operations-console layout. It consumes the real contract-v2 state and metrics APIs rather than mock data. Native Gazebo/RViz remain separate windows; browser-embedded 3-D visualization is still future work.
 
 ## Real Nav2 source case
 
