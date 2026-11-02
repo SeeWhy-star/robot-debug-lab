@@ -228,7 +228,13 @@ class FleetSupervisor:
             })
         return assignments
 
-    def plan(self, prompt, auto_repair=True, allow_handoff=True):
+    def plan(
+        self,
+        prompt,
+        auto_repair=True,
+        allow_handoff=True,
+        traffic_wait_timeout_seconds=45.0,
+    ):
         if not self.lock.acquire(False):
             raise ValueError("车队Agent正在规划另一条任务，请稍后重试")
         plan = {
@@ -242,6 +248,7 @@ class FleetSupervisor:
             "assignments": [],
             "run_ids": [],
             "allow_handoff": bool(allow_handoff),
+            "traffic_wait_timeout_seconds": float(traffic_wait_timeout_seconds),
             "handoffs": [],
         }
         remote = None

@@ -270,6 +270,30 @@ class Nav2Bridge:
                 f"{prefix}/compute_path_to_pose",
             )
 
+    def _wait_action_servers_gone(self, timeout=25.0):
+        """Wait for DDS to remove the stopped Nav2 action endpoints."""
+        deadline = time.monotonic() + float(timeout)
+        while time.monotonic() < deadline:
+            if all(
+                not runtime.client.server_is_ready()
+                and not runtime.path_client.server_is_ready()
+                for runtime in self.robots.values()
+            ):
+                return True
+            time.sleep(0.1)
+        return False
+
+    def _prepare_sim_restart(self):
+        self._stop_sim()
+        # Readiness on the old ActionClient can remain cached after its server
+        # participant is gone.  Recreate first, then ask the fresh clients
+        # whether DDS still exposes any endpoint from the stopped process.
+        self._refresh_action_clients()
+        if not self._wait_action_servers_gone():
+            raise RuntimeError(
+                "旧Nav2 action端点未从ROS图清除，拒绝在不确定状态下重启"
+            )
+
     def _wait_amcl_active(self, robot, timeout=45):
         rt = self._rt(robot)
         if not rt.amcl_lifecycle_client.wait_for_service(timeout_sec=timeout):
@@ -730,8 +754,7 @@ class Nav2Bridge:
         self._require_robot(robot)
         for rid in self.robot_ids:
             self.stop(rid)
-        self._stop_sim()
-        self._refresh_action_clients()
+        self._prepare_sim_restart()
         with self.data_lock:
             for runtime in self.robots.values():
                 runtime.scan_forwarding = True
@@ -749,8 +772,7 @@ class Nav2Bridge:
             # A failed ROS launch cannot be reused safely. One full retry is
             # bounded, visible to the caller, and avoids leaving a half-live
             # shared world behind after an intermittent discovery race.
-            self._stop_sim()
-            self._refresh_action_clients()
+            self._prepare_sim_restart()
             with self.data_lock:
                 for runtime in self.robots.values():
                     runtime.pose = None

@@ -24,6 +24,8 @@ SCENARIOS = {
         "auto_repair": True,
         "allow_handoff": False,
         "fault": None,
+        "traffic_wait_timeout_seconds": 45.0,
+        "expect_handoff": False,
     },
     "traffic": {
         "prompt": (
@@ -34,6 +36,21 @@ SCENARIOS = {
         "auto_repair": True,
         "allow_handoff": False,
         "fault": None,
+        "traffic_wait_timeout_seconds": 45.0,
+        "expect_handoff": False,
+    },
+    "traffic_timeout_handoff": {
+        "prompt": (
+            "保持以下明确分工且不要增加其他步骤："
+            "Robot 01从当前位置前往坐标(2.0, 0.5)，"
+            "Robot 02从当前位置前往坐标(2.0, -0.5)。"
+            "如果路线等待超时，允许已完成任务的机器人接替。"
+        ),
+        "auto_repair": True,
+        "allow_handoff": True,
+        "fault": None,
+        "traffic_wait_timeout_seconds": 3.0,
+        "expect_handoff": True,
     },
     "fault_recovery": {
         "prompt": (
@@ -44,6 +61,20 @@ SCENARIOS = {
         "auto_repair": True,
         "allow_handoff": False,
         "fault": "scan_interrupted",
+        "traffic_wait_timeout_seconds": 45.0,
+        "expect_handoff": False,
+    },
+    "lifecycle_recovery": {
+        "prompt": (
+            "保持以下明确分工且不要增加其他步骤："
+            "Robot 01前往实体障碍箱旁边；"
+            "Robot 02原地等待2秒后进入空闲状态。"
+        ),
+        "auto_repair": True,
+        "allow_handoff": False,
+        "fault": "navigator_inactive",
+        "traffic_wait_timeout_seconds": 45.0,
+        "expect_handoff": False,
     },
     "handoff": {
         "prompt": (
@@ -55,6 +86,8 @@ SCENARIOS = {
         "auto_repair": False,
         "allow_handoff": True,
         "fault": "scan_interrupted",
+        "traffic_wait_timeout_seconds": 45.0,
+        "expect_handoff": True,
     },
 }
 
@@ -158,7 +191,13 @@ def main():
                     row["recovery_mode"] for row in rows
                     if row.get("trial") == trial and row.get("scenario") == scenario
                 }
-                if set(modes) <= existing:
+                existing_rows = [
+                    row for row in rows
+                    if row.get("trial") == trial and row.get("scenario") == scenario
+                ]
+                if set(modes) <= existing and all(
+                    row.get("scenario_passed") for row in existing_rows
+                ):
                     print(f"trial {trial} / {scenario} 已完整，跳过")
                     continue
                 # Controlled AI/rules comparisons must replay one identical plan.
@@ -172,7 +211,7 @@ def main():
                 ).raise_for_status()
                 planning_attempts = 0
                 planned = None
-                for planning_attempts in (1, 2):
+                for planning_attempts in (1, 2, 3):
                     response = client.post(
                         "/api/fleet/tasks",
                         headers=headers,
@@ -180,18 +219,22 @@ def main():
                             "prompt": spec["prompt"],
                             "auto_repair": spec["auto_repair"],
                             "allow_handoff": spec["allow_handoff"],
+                            "traffic_wait_timeout_seconds": spec[
+                                "traffic_wait_timeout_seconds"
+                            ],
                             "execute": False,
                         },
                     )
                     if response.is_success:
                         planned = response.json()
                         break
-                    if response.status_code not in {409, 502} or planning_attempts == 2:
+                    if response.status_code not in {409, 502} or planning_attempts == 3:
                         raise RuntimeError(
                             f"车队模型规划失败({response.status_code})：{response.text[:500]}"
                         )
                     print(
-                        f"{scenario} 第一次模型规划未通过网关，使用同一提示重试一次",
+                        f"{scenario} 第{planning_attempts}次模型规划未通过网关，"
+                        "使用同一提示进行有界重试",
                         flush=True,
                     )
                     time.sleep(1.0)
@@ -223,7 +266,7 @@ def main():
                         client, dispatched["run_ids"], time.monotonic() + 210
                     )
                     handoff_run = handoff_record = None
-                    if scenario == "handoff":
+                    if spec["expect_handoff"]:
                         handoff_run, handoff_record = _wait_handoff(
                             client, plan["id"], set(dispatched["run_ids"]),
                             time.monotonic() + 210,

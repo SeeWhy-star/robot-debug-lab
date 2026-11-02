@@ -489,6 +489,62 @@ def test_reset_refreshes_nav2_action_clients_before_starting_sim(monkeypatch):
     ]
 
 
+def test_sim_restart_refreshes_clients_then_waits_for_old_action_endpoints():
+    from robot_debug_lab.nav2_bridge import Nav2Bridge
+
+    class Client:
+        def __init__(self, states):
+            self.states = iter(states)
+            self.last = True
+
+        def server_is_ready(self):
+            self.last = next(self.states, self.last)
+            return self.last
+
+    bridge = Nav2Bridge.__new__(Nav2Bridge)
+    bridge.robots = {}
+    order = []
+    bridge._stop_sim = lambda: order.append("stopped")
+
+    def refresh():
+        order.append("refreshed")
+        bridge.robots = {
+            "robot_1": SimpleNamespace(
+                client=Client([True, False]), path_client=Client([False, False])
+            ),
+            "robot_2": SimpleNamespace(
+                client=Client([False, False]), path_client=Client([False, False])
+            ),
+        }
+
+    bridge._refresh_action_clients = refresh
+
+    bridge._prepare_sim_restart()
+
+    assert order == ["stopped", "refreshed"]
+
+
+def test_sim_restart_fails_closed_when_old_action_endpoints_remain(monkeypatch):
+    from robot_debug_lab import nav2_bridge
+    from robot_debug_lab.nav2_bridge import Nav2Bridge
+
+    ready = SimpleNamespace(server_is_ready=lambda: True)
+    bridge = Nav2Bridge.__new__(Nav2Bridge)
+    bridge.robots = {
+        "robot_1": SimpleNamespace(client=ready, path_client=ready),
+    }
+    bridge._stop_sim = lambda: None
+    refreshed = []
+    bridge._refresh_action_clients = lambda: refreshed.append(True)
+    ticks = iter([0.0, 0.0, 26.0])
+    monkeypatch.setattr(nav2_bridge.time, "monotonic", lambda: next(ticks, 26.0))
+    monkeypatch.setattr(nav2_bridge.time, "sleep", lambda _: None)
+
+    with pytest.raises(RuntimeError, match="旧Nav2 action端点"):
+        bridge._prepare_sim_restart()
+    assert refreshed == [True]
+
+
 @pytest.mark.parametrize(
     "url",
     [

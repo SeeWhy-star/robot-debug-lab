@@ -362,6 +362,47 @@ def test_fleet_workflow_serializes_conflicting_nav2_routes(tmp_path):
         workflow.close()
 
 
+def test_traffic_timeout_reassigns_portable_goal_after_peer_finishes(tmp_path):
+    store = Store(tmp_path / "traffic-timeout-handoff.sqlite")
+    bridge = ConflictingFleetBridge()
+    mission = Supervisor(store, scene=SemanticScene())
+    supervisor = FleetSupervisor(store, bridge, mission, CoordinateFleetModel())
+    plan = supervisor.plan(
+        "Robot 01去(2,0.5)，Robot 02去(2,-0.5)，等待超时后允许接替",
+        allow_handoff=True,
+        traffic_wait_timeout_seconds=0.02,
+    )
+    workflow = Workflow(bridge, store)
+    try:
+        originals = workflow.submit_fleet(plan)
+        deadline = time.monotonic() + 4
+        handoff = None
+        while time.monotonic() < deadline:
+            current_plan = store.get_plan(plan["id"])
+            if current_plan.get("handoffs"):
+                record = current_plan["handoffs"][0]
+                handoff = store.get(record["handoff_run_id"])
+                if handoff["status"] == "verified" and record["status"] == "verified":
+                    break
+            time.sleep(0.02)
+
+        current = [store.get(run["id"]) for run in originals]
+        failed = next(run for run in current if run["status"] == "failed")
+        peer = next(run for run in current if run["status"] == "verified")
+        assert any(
+            event["kind"] == "traffic_timeout" for event in failed["events"]
+        )
+        assert failed["steps"][0]["traffic_wait_timeouts"][0]["blocked_by"] == [
+            peer["robot_id"]
+        ]
+        assert handoff is not None and handoff["status"] == "verified"
+        assert handoff["robot_id"] == peer["robot_id"]
+        assert handoff["steps"][0]["x"] == failed["steps"][0]["x"]
+        assert handoff["steps"][0]["y"] == failed["steps"][0]["y"]
+    finally:
+        workflow.close()
+
+
 def test_fleet_dispatch_rejects_whole_batch_when_one_robot_is_busy(tmp_path):
     store, bridge, supervisor = make_supervisor(tmp_path)
     plan = supervisor.plan("并行执行两项任务")

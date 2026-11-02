@@ -6,6 +6,10 @@ from .supervisor import NavigationTask
 from .traffic import FleetTrafficCoordinator
 
 
+class TrafficWaitExpired(RuntimeError):
+    pass
+
+
 class Workflow:
     def __init__(self, bridge, store, replanner=None):
         self.bridge = bridge
@@ -390,11 +394,29 @@ class Workflow:
         r["status"] = "traffic_waiting"
         self.store.save(r)
         reservation = self.traffic.acquire(
-            rid, r["id"], step["id"], points, cancel
+            rid,
+            r["id"],
+            step["id"],
+            points,
+            cancel,
+            timeout_seconds=float(
+                (r.get("plan") or {}).get("traffic_wait_timeout_seconds", 45.0)
+            ),
         )
         if reservation is None:
             raise Canceled()
         reservation["phase"] = phase
+        if reservation.get("timed_out"):
+            step.setdefault("traffic_wait_timeouts", []).append(deepcopy(reservation))
+            self.store.event(
+                r,
+                "traffic_timeout",
+                f"{step['id']} 等待路线通行权超时，允许车队重新分工",
+                reservation,
+            )
+            raise TrafficWaitExpired(
+                f"路线通行权等待超过 {reservation['timeout_seconds']:g} 秒"
+            )
         step.setdefault("traffic_reservations", []).append(deepcopy(reservation))
         kind = "traffic_waited" if reservation["blocked_by"] else "traffic_reserved"
         title = (
@@ -741,6 +763,20 @@ class Workflow:
                 step = r["steps"][r["current_step"]]
                 step.update(status="canceled", finished=time.time(), failure_reason="用户取消")
             self.store.event(r, "cancel", "用户取消任务")
+        except TrafficWaitExpired as error:
+            r["status"] = "failed"
+            r["error"] = str(error)
+            if r.get("current_step") is not None:
+                step = r["steps"][r["current_step"]]
+                step.update(
+                    status="failed",
+                    finished=time.time(),
+                    failure_reason=r["error"],
+                )
+            self.store.event(r, "step_failed", "路线等待超时", {
+                "reason": r["error"],
+                "reassignable": True,
+            })
         except Exception as error:
             r["status"] = "failed"
             r["error"] = str(error)[:500]

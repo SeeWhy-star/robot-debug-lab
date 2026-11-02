@@ -70,3 +70,22 @@ def test_waiting_route_can_be_canceled():
     assert result["reservation"] is None
     assert traffic.snapshot()["queued"] == 0
     traffic.release(first["token"])
+
+
+def test_waiting_route_returns_auditable_timeout_and_leaves_no_queue_entry():
+    traffic = FleetTrafficCoordinator()
+    first = traffic.acquire(
+        "robot_1", "run-1", "S1", None, threading.Event()
+    )
+
+    timed_out = traffic.acquire(
+        "robot_2", "run-2", "S1", None, threading.Event(),
+        timeout_seconds=0.03,
+    )
+
+    assert timed_out["timed_out"] is True
+    assert timed_out["blocked_by"] == ["robot_1"]
+    assert timed_out["wait_seconds"] >= 0.03
+    assert timed_out["timeout_seconds"] == 0.03
+    assert traffic.snapshot()["queued"] == 0
+    traffic.release(first["token"])

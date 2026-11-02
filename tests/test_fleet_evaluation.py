@@ -126,6 +126,34 @@ def test_handoff_preserves_source_failure_and_scores_separate_acceptance():
     assert row["scenario_passed"] is True
     assert row["original_batch_restored"] is False
     assert row["handoff_verified"] is True
+
+
+def test_traffic_timeout_handoff_requires_timeout_peer_and_separate_acceptance():
+    source = {
+        "id": "r1", "robot_id": "robot_1", "status": "failed",
+        "events": [{"kind": "traffic_timeout", "title": "timeout", "data": {}}],
+        "steps": [{
+            "action": "navigate",
+            "traffic_reservations": [],
+            "traffic_wait_timeouts": [{
+                "timed_out": True, "blocked_by": ["robot_2"],
+                "wait_seconds": 3.0, "path_mode": "nav2_geometry",
+            }],
+        }],
+        "mission_acceptance": None,
+    }
+    peer = verified("robot_2", "r2")
+    handoff = verified("robot_2", "h1")
+
+    row = evaluate_fleet_case(
+        "traffic_timeout_handoff", "ai", plan(), [source, peer],
+        handoff_run=handoff,
+        handoff_record={"status": "verified"},
+    )
+
+    assert row["scenario_passed"] is True
+    assert row["traffic_wait_timeouts"] == 1
+    assert row["handoff_verified"] is True
     assert row["unaffected_peer_completed"] is True
 
 
@@ -144,6 +172,7 @@ def test_summary_keeps_ai_and_rules_comparable():
     assert [(item["recovery_mode"], item["success_rate"]) for item in summary] == [
         ("ai", 1.0), ("rules", 1.0)
     ]
+    assert all(item["traffic_wait_timeouts"] == 0 for item in summary)
 
 
 def test_wait_only_peer_uses_mission_acceptance_without_fake_pose_validation():

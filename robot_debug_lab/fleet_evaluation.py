@@ -24,6 +24,15 @@ def _reservations(runs):
     ]
 
 
+def _traffic_timeouts(runs):
+    return [
+        timeout
+        for run in runs
+        for step in run.get("steps", [])
+        for timeout in step.get("traffic_wait_timeouts", [])
+    ]
+
+
 def _independently_accepted(run):
     navigates = any(
         step.get("action") in {"navigate", "return_to_start"}
@@ -78,6 +87,7 @@ def evaluate_fleet_case(
         for operation, cause in zip(operations, repair_causes)
     )
     reservations = _reservations(evidence_runs)
+    traffic_timeouts = _traffic_timeouts(evidence_runs)
     waited = [item for item in reservations if item.get("blocked_by")]
     diagnostic_calls = sum(
         event.get("kind") == "tool" and event.get("title") in DIAGNOSTIC_TOOLS
@@ -91,7 +101,9 @@ def evaluate_fleet_case(
             and event["data"].get("cause") == expected_fault
             for event in run.get("events", [])
         )
-    ), None) if expected_fault else None
+    ), None) if expected_fault else next((
+        run for run in originals if _traffic_timeouts([run])
+    ), None)
     peers = [run for run in originals if source is None or run.get("id") != source.get("id")]
     all_original_verified = bool(originals) and all(
         run.get("status") == "verified"
@@ -114,7 +126,7 @@ def evaluate_fleet_case(
         passed = all_original_verified and bool(waited) and all(
             item.get("path_mode") == "nav2_geometry" for item in reservations
         )
-    elif scenario == "fault_recovery":
+    elif scenario in {"fault_recovery", "lifecycle_recovery"}:
         passed = bool(
             all_original_verified and identified and expected_operation in operations
             and wrong_repairs == 0 and all(run.get("status") == "verified" for run in peers)
@@ -125,6 +137,13 @@ def evaluate_fleet_case(
             source and source.get("status") in {"unresolved", "failed"}
             and identified and peers and all(run.get("status") == "verified" for run in peers)
             and not operations and handoff_verified and ai_used_for_fault
+        )
+    elif scenario == "traffic_timeout_handoff":
+        passed = bool(
+            source and source.get("status") == "failed"
+            and traffic_timeouts and peers
+            and all(run.get("status") == "verified" for run in peers)
+            and handoff_verified and not operations
         )
     else:
         passed = all_original_verified
@@ -151,7 +170,7 @@ def evaluate_fleet_case(
         "handoff_verified": handoff_verified,
         "unaffected_peer_completed": bool(peers) and all(
             run.get("status") == "verified" for run in peers
-        ) if expected_fault else None,
+        ) if expected_fault or traffic_timeouts else None,
         "independent_gazebo_acceptance": independent_gazebo_acceptance,
         "wrong_repairs": wrong_repairs,
         "repair_operations": operations,
@@ -160,6 +179,7 @@ def evaluate_fleet_case(
         "diagnostic_tool_calls": diagnostic_calls,
         "traffic_reservations": len(reservations),
         "traffic_conflict_waits": len(waited),
+        "traffic_wait_timeouts": len(traffic_timeouts),
         "traffic_total_wait_seconds": round(
             sum(float(item.get("wait_seconds", 0)) for item in waited), 3
         ),
@@ -203,6 +223,9 @@ def summarize_fleet_rows(rows):
             "average_traffic_wait_seconds": round(
                 sum(float(row["traffic_total_wait_seconds"]) for row in group) / count,
                 3,
+            ),
+            "traffic_wait_timeouts": sum(
+                int(row.get("traffic_wait_timeouts", 0)) for row in group
             ),
             "average_diagnostic_tool_calls": round(
                 sum(int(row["diagnostic_tool_calls"]) for row in group) / count, 2

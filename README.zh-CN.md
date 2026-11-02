@@ -37,7 +37,7 @@
 
 **第二阶段后端已完成。** 四种机制不同的 ROS/Nav2 故障、AI/规则对照、复杂任务中途恢复、自动评测和“系统修复后同一步再做路线恢复”的组合案例均已落地。定位漂移使用真实 `/initialpose` 改变 AMCL 状态，并以 Gazebo 真值重新播种作为仿真专用白名单修复。动态代价地图候选生成、任意条件任务图、重启续跑和实体取放仍属于后续扩展。
 
-**第三阶段已经具备完整后端基线。** Gazebo中现在有两台实体TurtleBot3，各自使用`/robot_1`和`/robot_2`命名空间运行独立雷达、里程计、TF、AMCL和Nav2。车队OpenFang Agent查询实时车队状态与统一语义地点，输出结构化分工；后端执行原子分派、唯一充电站约束、真实Nav2路径预约和可审计的失败任务接替。提交的[可重复车队评测矩阵](docs/fleet-evaluation-results.json)覆盖并行任务、交叉交通、雷达故障恢复和任务接替，AI/规则共8个真实用例全部通过。每个场景只生成一份经过验证的模型计划供两种模式共同重放，全部结果使用独立验收，错误修复为0。下一步仍需多轮统计、等待超时后的重新分工和时间维度的多机器人路径规划。
+**第三阶段后端已完成。** Gazebo中现在有两台实体TurtleBot3，各自使用`/robot_1`和`/robot_2`命名空间运行独立雷达、里程计、TF、AMCL和Nav2。车队OpenFang Agent查询实时车队状态与统一语义地点，输出结构化分工；后端执行原子分派、唯一充电站约束、真实Nav2整路预约和可审计的失败任务接替。路线等待有明确上限，超时会形成独立失败记录，再由已经通过验收的机器人接替可迁移目标，不会无限等待。提交的[可重复车队评测矩阵](docs/fleet-evaluation-results.json)完成6个场景、3轮、AI/规则两种模式，共36个真实用例，全部通过：并行执行、交叉交通、等待超时接替、雷达链路恢复、Nav2 lifecycle恢复和未修复故障接替。每个场景每轮只生成一份经过验证的模型计划供两种模式共同重放；全部结果使用Gazebo独立验收，AI故障运行均调用模型调查工具，错误修复和全局路线降级均为0。带时间维度的MAPF、两台以上车队和实体机器人安全层属于本阶段之外的研究扩展。
 
 ## 系统结构
 
@@ -117,7 +117,7 @@ AI 模式需要在 `.env` 配置直连模型，或设置 `RDL_AGENT_BACKEND=open
 .venv/bin/python scripts/acceptance_fleet.py --reset
 .venv/bin/python scripts/acceptance_fleet_handoff.py --output docs/fleet-handoff-results.json
 .venv/bin/python scripts/acceptance_fleet_traffic.py --output docs/fleet-traffic-results.json
-.venv/bin/python scripts/evaluate_fleet_matrix.py --scenario all --mode both --trials 1 --resume --output docs/fleet-evaluation-results.json
+.venv/bin/python scripts/evaluate_fleet_matrix.py --scenario all --mode both --trials 3 --resume --output docs/fleet-evaluation-results.json
 .venv/bin/python scripts/evaluate_fault_matrix.py --mode both
 .venv/bin/python scripts/evaluate_mission_faults.py --fault all --mode both --trials 3 --resume
 # 单独复现第四种定位故障

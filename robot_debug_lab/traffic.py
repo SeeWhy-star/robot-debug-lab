@@ -51,9 +51,16 @@ class FleetTrafficCoordinator:
         # Missing path geometry is fail-closed: reserve the whole traffic layer.
         return left is None or right is None or not left.isdisjoint(right)
 
-    def acquire(self, robot_id, run_id, step_id, points, cancel):
+    def acquire(
+        self, robot_id, run_id, step_id, points, cancel,
+        timeout_seconds=None,
+    ):
         cells = self._cells(points)
         requested = time.monotonic()
+        deadline = (
+            requested + float(timeout_seconds)
+            if timeout_seconds is not None else None
+        )
         blockers_seen = set()
         with self.condition:
             self.sequence += 1
@@ -96,7 +103,26 @@ class FleetTrafficCoordinator:
                     }
                     self.active[token] = record
                     return {key: value for key, value in record.items() if key != "cells"}
-                self.condition.wait(0.1)
+                if deadline is not None and time.monotonic() >= deadline:
+                    self.queued.pop(ticket, None)
+                    self.condition.notify_all()
+                    return {
+                        "timed_out": True,
+                        "robot_id": robot_id,
+                        "run_id": run_id,
+                        "step_id": step_id,
+                        "reservation_cells": len(cells) if cells is not None else None,
+                        "path_mode": (
+                            "nav2_geometry" if cells is not None else "global_fallback"
+                        ),
+                        "wait_seconds": round(time.monotonic() - requested, 3),
+                        "timeout_seconds": float(timeout_seconds),
+                        "blocked_by": sorted(blockers_seen),
+                    }
+                wait_for = 0.1
+                if deadline is not None:
+                    wait_for = max(0.001, min(wait_for, deadline - time.monotonic()))
+                self.condition.wait(wait_for)
 
     def release(self, token):
         with self.condition:

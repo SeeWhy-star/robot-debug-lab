@@ -102,6 +102,9 @@ class FleetRequest(BaseModel):
     recovery_mode: Literal["ai", "rules"] = "ai"
     execute: bool = True
     allow_handoff: bool = True
+    traffic_wait_timeout_seconds: float = Field(
+        default=45.0, ge=1.0, le=120.0, allow_inf_nan=False
+    )
 
 
 class Target(BaseModel):
@@ -322,7 +325,10 @@ def fleet_task(q: FleetRequest):
         raise HTTPException(409, "Configure model credentials first")
     try:
         plan = app.state.fleet_supervisor.plan(
-            q.prompt, q.auto_repair, q.allow_handoff
+            q.prompt,
+            q.auto_repair,
+            q.allow_handoff,
+            q.traffic_wait_timeout_seconds,
         )
         if not q.execute:
             return {"plan": plan, "run_ids": []}
@@ -348,6 +354,13 @@ def _validate_stored_fleet_plan(plan):
     scene = app.state.supervisor.scene
     coordinates = explicit_coordinates(plan.get("request_text", ""))
     from .config import ROBOT_STARTS, ROBOTS
+
+    try:
+        traffic_timeout = float(plan.get("traffic_wait_timeout_seconds", 45.0))
+    except (TypeError, ValueError):
+        raise ValueError("存储车队计划包含无效路线等待上限") from None
+    if not 1.0 <= traffic_timeout <= 120.0:
+        raise ValueError("存储车队计划包含无效路线等待上限")
 
     for assignment in assignments:
         robot = assignment.get("robot_id")
