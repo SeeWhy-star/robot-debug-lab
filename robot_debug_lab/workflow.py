@@ -1,4 +1,4 @@
-import threading, concurrent.futures, time
+import threading, concurrent.futures, time, math
 from copy import deepcopy
 from .agents import RobotAgent, Canceled, infer
 from .config import robot_id, ROBOTS, AGENT_BACKEND
@@ -203,7 +203,7 @@ class Workflow:
                     runs.append((run, cancel))
                 for run, cancel in runs:
                     self.pool.submit(self.run_mission, run, cancel)
-                if plan.get("allow_handoff", False) and len(runs) > 1:
+                if len(runs) > 1:
                     self.fleet_pool.submit(
                         self._monitor_fleet,
                         plan["id"],
@@ -255,6 +255,10 @@ class Workflow:
                 break
             time.sleep(0.2)
         if self.closed:
+            return
+        plan = self.store.get_plan(plan_id) or {}
+        self._record_spatial_acceptance(plan, runs)
+        if not plan.get("allow_handoff", False):
             return
         failed = [run for run in runs if run["status"] in {"unresolved", "failed"}]
         healthy = [run for run in runs if run["status"] == "verified"]
@@ -329,6 +333,83 @@ class Workflow:
                 self.cancel_events.pop(handoff["id"], None) if "handoff" in locals() else None
                 self.bridge.locks[target_robot].release()
                 raise
+
+    def _record_spatial_acceptance(self, plan, runs):
+        """Verify a paired spatial objective from fresh Gazebo ground truth."""
+        analysis = plan.get("spatial_analysis")
+        if not analysis or not analysis.get("resolved"):
+            return
+        targets = {
+            item["robot_id"]: (float(item["x"]), float(item["y"]))
+            for item in analysis.get("assignments", [])
+        }
+        live = {
+            item["id"]: item.get("pose")
+            for item in self.bridge.public()
+        }
+        now = time.time()
+        if set(targets) != set(live) or any(
+            not live[rid]
+            or live[rid].get("source") != "gazebo_odometry"
+            or not 0 <= now - live[rid].get("observed", 0) <= 2.0
+            for rid in targets
+        ):
+            acceptance = {
+                "success": False,
+                "source": "gazebo_ground_truth",
+                "reason": "missing_or_stale_gazebo_pose",
+            }
+        else:
+            target_errors = {
+                rid: math.hypot(
+                    float(live[rid]["x"]) - target[0],
+                    float(live[rid]["y"]) - target[1],
+                )
+                for rid, target in targets.items()
+            }
+            robot_ids = sorted(targets)
+            actual_separation = round(math.hypot(
+                float(live[robot_ids[0]]["x"]) - float(live[robot_ids[1]]["x"]),
+                float(live[robot_ids[0]]["y"]) - float(live[robot_ids[1]]["y"]),
+            ), 3)
+            target_separation = float(
+                analysis.get("metrics", {}).get("target_separation", 0.0)
+            )
+            statuses_ok = all(run.get("status") == "verified" for run in runs)
+            positions_ok = all(error <= 0.35 for error in target_errors.values())
+            separation_ok = actual_separation >= 0.65
+            if analysis.get("objective") == "rendezvous":
+                separation_ok = separation_ok and actual_separation <= 1.35
+            acceptance = {
+                "success": statuses_ok and positions_ok and separation_ok,
+                "source": "gazebo_ground_truth",
+                "objective": analysis.get("objective"),
+                "target_separation": target_separation,
+                "actual_separation": actual_separation,
+                "separation_error": round(
+                    abs(actual_separation - target_separation), 3
+                ),
+                "robot_target_errors": {
+                    rid: round(error, 3) for rid, error in target_errors.items()
+                },
+                "poses": live,
+                "position_threshold": 0.35,
+                "minimum_robot_separation": 0.65,
+                "run_statuses": {
+                    run["robot_id"]: run.get("status") for run in runs
+                },
+            }
+        plan["fleet_acceptance"] = acceptance
+        self.store.save_plan(plan)
+        for run in runs:
+            current = self.store.get(run["id"])
+            if current:
+                self.store.event(
+                    current,
+                    "fleet_spatial_validation",
+                    "双机器人空间目标 Gazebo 独立验收",
+                    deepcopy(acceptance),
+                )
 
     def _finish_handoff(self, run):
         """Persist the terminal handoff outcome in both linked records."""

@@ -13,6 +13,7 @@ from robot_debug_lab.app import (
     assistant_task,
 )
 from robot_debug_lab.semantic_scene import SemanticScene
+from robot_debug_lab.spatial import map_fingerprint
 
 
 def stored_plan():
@@ -178,3 +179,35 @@ def test_stored_fleet_plan_rejects_scene_drift_and_invented_coordinates():
     malformed["assignments"][0]["steps"][0]["x"] = None
     with pytest.raises(ValueError, match="无效坐标"):
         _validate_stored_fleet_plan(malformed)
+
+
+def test_stored_fleet_plan_accepts_exact_spatial_evidence_and_rejects_tampering():
+    plan = stored_fleet_plan()
+    plan["request_text"] = "让两个机器人尽量远离"
+    targets = {
+        "robot_1": (-3.775, -3.225),
+        "robot_2": (3.825, 3.175),
+    }
+    plan["spatial_analysis"] = {
+        "resolved": True,
+        "objective": "maximize_separation",
+        "assignments": [
+            {"robot_id": rid, "x": target[0], "y": target[1]}
+            for rid, target in targets.items()
+        ],
+        "metrics": {"target_separation": 9.936},
+        "evidence": {"map_fingerprint": map_fingerprint()},
+    }
+    for assignment in plan["assignments"]:
+        x, y = targets[assignment["robot_id"]]
+        assignment["steps"][0].update(
+            destination_id=None, approach_id=None, x=x, y=y,
+        )
+    configure_app(plan)
+
+    _validate_stored_fleet_plan(plan)
+
+    changed = deepcopy(plan)
+    changed["assignments"][0]["steps"][0]["x"] += 0.4
+    with pytest.raises(ValueError, match="空间分析工具授权"):
+        _validate_stored_fleet_plan(changed)

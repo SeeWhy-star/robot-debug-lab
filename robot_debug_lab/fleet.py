@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from . import config
 from .agents import CompatibleModel, ModelError
 from .openfang import OpenFangModel
+from .spatial import SafeFleetPoseAnalyzer, final_navigation_targets
 from .supervisor import MissionStep
 
 
@@ -129,6 +130,34 @@ FLEET_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "analyze_fleet_poses",
+            "description": (
+                "Compute two safe, map-grounded and Nav2-reachable robot poses for a spatial "
+                "objective. Returned coordinates are authorized only for the assigned robot."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "objective": {
+                        "type": "string",
+                        "enum": [
+                            "maximize_separation",
+                            "balanced_coverage",
+                            "rendezvous",
+                        ],
+                    },
+                    "clearance": {
+                        "type": "number", "minimum": 0.35, "maximum": 0.8,
+                    },
+                },
+                "required": ["objective", "clearance"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "finish_fleet_response",
             "description": (
                 "End without dispatch when the request cannot be grounded into the available "
@@ -204,19 +233,27 @@ and simulate_charge must immediately follow navigation to charging_station. Unsu
 or manipulation must not be faked. Shell, velocity control, parameter changes and arbitrary tools are
 forbidden. Words such as 原地, 当前位置 and current position refer to the robot's live pose: wait and
 enter_idle use destination_id=null and those words are not scene destinations. Return at most eight
-steps per robot and never claim that execution already happened. Computing optimal positions, searching
-the occupancy map for extrema such as the farthest reachable pair, inspection, perception and
-manipulation are unavailable unless a provided tool returns that result. For those requests, call
-finish_fleet_response promptly, state the missing capability, and suggest tasks using registered
-destinations or user-provided coordinates. Never loop, guess coordinates or silently reinterpret them."""
+steps per robot and never claim that execution already happened. For requests to maximize robot
+separation, balance warehouse coverage, or rendezvous safely, call analyze_fleet_poses after
+get_fleet_state, preserve its robot-to-coordinate assignments exactly, and then call finish_fleet_plan.
+The spatial tool uses the real Nav2 occupancy map and validates both routes; do not replace, swap or
+invent its coordinates. These are approximate results from a bounded 0.4 m sample search, not a proof
+of global optimality. Coverage means two static positions, not a completed patrol or inspection.
+Keep the analyzed targets as each robot's final navigation destination. Inspection, perception and
+manipulation remain unavailable. If a requested
+capability has no tool result, call finish_fleet_response promptly and explain the gap. Never loop,
+guess coordinates or silently reinterpret the request."""
 
 
 class FleetSupervisor:
-    def __init__(self, store, bridge, mission_supervisor, model=None):
+    def __init__(
+        self, store, bridge, mission_supervisor, model=None, spatial_analyzer=None
+    ):
         self.store = store
         self.bridge = bridge
         self.mission_supervisor = mission_supervisor
         self.model = model
+        self.spatial_analyzer = spatial_analyzer or SafeFleetPoseAnalyzer(bridge)
         self.lock = threading.Lock()
 
     def _fleet_state(self):
@@ -249,6 +286,10 @@ class FleetSupervisor:
                     for value in names
                 ]
             }
+        if name == "analyze_fleet_poses" and set(args) == {"objective", "clearance"}:
+            return self.spatial_analyzer.analyze(
+                args["objective"], args["clearance"]
+            )
         raise ValueError("invalid or unauthorized fleet tool")
 
     def _recoverable_unresolved_query(self, query):
@@ -323,6 +364,8 @@ class FleetSupervisor:
             fleet_observed = False
             observed_objects = set()
             unresolved_queries = set()
+            spatial_analysis = None
+            spatial_targets = {}
             trace = []
             seen = set()
             for _ in range(10):
@@ -434,8 +477,22 @@ class FleetSupervisor:
                                     step.action == "navigate"
                                     and step.destination_id is None
                                     and (step.x, step.y) not in user_coordinates
+                                    and spatial_targets.get(assignment.robot_id)
+                                    != (step.x, step.y)
                                 ):
-                                    raise ModelError("车队计划引用了用户未明确提供的坐标")
+                                    raise ModelError(
+                                        "车队计划引用了用户未明确提供且空间分析工具未授权的坐标"
+                                    )
+                        if spatial_analysis and spatial_analysis.get("resolved"):
+                            planned_spatial_targets = final_navigation_targets([
+                                item.model_dump() for item in draft.assignments
+                            ])
+                            if planned_spatial_targets != spatial_targets:
+                                raise ModelError(
+                                    "空间任务必须保留工具返回的两台机器人目标分工"
+                                )
+                        elif spatial_analysis is not None:
+                            raise ModelError("空间分析未找到可行站位，不能生成执行计划")
                         plan.update(
                             status="ready",
                             message=draft.message,
@@ -443,11 +500,23 @@ class FleetSupervisor:
                             usage=usage,
                             tool_trace=trace,
                         )
+                        if spatial_analysis:
+                            plan.update(
+                                spatial_analysis=spatial_analysis,
+                                allow_handoff=False,
+                                handoff_policy_reason=(
+                                    "双机器人空间目标需要同时保持最终站位，不能由单机接替"
+                                ),
+                            )
                         return plan
                     signature = (name, json.dumps(args, sort_keys=True, ensure_ascii=False))
                     if signature in seen:
                         raise ModelError("车队Agent重复调用了相同工具")
                     seen.add(signature)
+                    if name == "analyze_fleet_poses" and not fleet_observed:
+                        raise ModelError("空间分析前必须先读取实时车队状态")
+                    if name == "analyze_fleet_poses" and spatial_analysis is not None:
+                        raise ModelError("每个车队计划只能执行一次空间目标分析")
                     result = self._tool(name, args)
                     if name == "get_fleet_state":
                         fleet_observed = True
@@ -469,6 +538,13 @@ class FleetSupervisor:
                                 "未解析项不能作为导航目标。原地/当前位置等待请使用"
                                 "destination_id=null；已登记对象请改用其准确名称重新查询。"
                             )
+                    elif name == "analyze_fleet_poses":
+                        spatial_analysis = result
+                        if result.get("resolved"):
+                            spatial_targets = {
+                                item["robot_id"]: (item["x"], item["y"])
+                                for item in result["assignments"]
+                            }
                     trace.append({"name": name, "arguments": args, "result": result})
                     messages.append({
                         "role": "tool", "tool_call_id": call["id"],

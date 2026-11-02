@@ -87,6 +87,30 @@ type AssistantPlan = {
   }[];
   reason?: string;
   suggested_requests?: string[];
+  spatial_analysis?: {
+    objective: string;
+    metrics: {
+      target_separation: number;
+      total_nav2_path_length: number;
+      requested_clearance: number;
+    };
+    evidence: {
+      map: string;
+      map_fingerprint: string;
+      safe_candidate_count: number;
+      route_validation: string;
+      algorithm: string;
+    };
+  };
+  fleet_acceptance?: {
+    success: boolean;
+    source: string;
+    target_separation?: number;
+    actual_separation?: number;
+    separation_error?: number;
+    position_threshold?: number;
+  };
+  handoff_policy_reason?: string;
 };
 type State = {
   plans?: AssistantPlan[];
@@ -499,6 +523,34 @@ function App() {
               <small>可执行替代指令：</small>
               {assistantPlan.suggested_requests.map((item) => <p key={item}>· {item}</p>)}
             </div>}
+            {assistantPlan.spatial_analysis && <div className="spatial-evidence">
+              <p><b>空间分析证据</b> · {
+                assistantPlan.spatial_analysis.objective === "maximize_separation" ? "最大安全分离"
+                  : assistantPlan.spatial_analysis.objective === "balanced_coverage" ? "均衡区域覆盖"
+                    : "安全会合"
+              }</p>
+              <p>
+                目标间距 {assistantPlan.spatial_analysis.metrics.target_separation.toFixed(2)} m
+                {` · 安全间距 ${assistantPlan.spatial_analysis.metrics.requested_clearance.toFixed(2)} m`}
+                {` · Nav2 总路径 ${assistantPlan.spatial_analysis.metrics.total_nav2_path_length.toFixed(2)} m`}
+              </p>
+              <small>
+                Nav2 实际占据地图 {assistantPlan.spatial_analysis.evidence.map}
+                {` · ${assistantPlan.spatial_analysis.evidence.safe_candidate_count} 个安全候选点`}
+                {` · ${assistantPlan.spatial_analysis.evidence.route_validation}`}
+              </small>
+              <p className="hint">按 0.40 m 间隔采样并限量验证候选点，结果为近似站位方案，不保证全地图最优；覆盖表示双机分散站位，尚不包含巡逻或检测。</p>
+            </div>}
+            {assistantPlan.fleet_acceptance && <div className="spatial-evidence">
+              <p><b>{assistantPlan.fleet_acceptance.success ? "空间目标验收通过" : "空间目标验收未通过"}</b></p>
+              {assistantPlan.fleet_acceptance.actual_separation != null && <p>
+                Gazebo 实测间距 {assistantPlan.fleet_acceptance.actual_separation.toFixed(2)} m
+                {assistantPlan.fleet_acceptance.target_separation != null
+                  ? ` · 目标 ${assistantPlan.fleet_acceptance.target_separation.toFixed(2)} m` : ""}
+              </p>}
+              <small>验收来源：Gazebo 独立里程计真值</small>
+            </div>}
+            {assistantPlan.handoff_policy_reason && <p className="hint">接替策略：{assistantPlan.handoff_policy_reason}</p>}
             {!!assistantPlan.turns?.length && <details><summary>查看指令对话</summary>
               {assistantPlan.turns.map((t, i) => <p key={i}><b>{t.role === "user" ? "你" : "Assistant"}：</b>{t.content}</p>)}
             </details>}

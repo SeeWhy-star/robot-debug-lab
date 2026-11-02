@@ -1,0 +1,159 @@
+{
+  "recorded_at": "2026-11-02T08:23:39.547593+00:00",
+  "elapsed_seconds": 61.169,
+  "plan_id": "9c029bb32a32",
+  "prompt": "让两台机器人分散到合适的安全位置，尽量均衡覆盖仓库，停好即可",
+  "planner_backend": "openfang",
+  "planning_usage": {
+    "prompt_tokens": 21294,
+    "completion_tokens": 862
+  },
+  "tool_calls": [
+    "get_fleet_state",
+    "analyze_fleet_poses"
+  ],
+  "initial_poses": {
+    "robot_1": {
+      "x": -1.999999903452644,
+      "y": -0.49999999999999994,
+      "theta": 9.197018780752918e-10,
+      "speed": 3.529303946892918e-21,
+      "observed": 1793607800.1887238,
+      "source": "gazebo_odometry"
+    },
+    "robot_2": {
+      "x": -1.999999903452644,
+      "y": 0.5,
+      "theta": 9.197018780761226e-10,
+      "speed": 5.07337442365857e-21,
+      "observed": 1793607800.1935794,
+      "source": "gazebo_odometry"
+    }
+  },
+  "analysis": {
+    "resolved": true,
+    "objective": "balanced_coverage",
+    "assignments": [
+      {
+        "robot_id": "robot_1",
+        "x": -1.775,
+        "y": -0.425,
+        "path_length": 0.281,
+        "path_pose_count": 9,
+        "map_clearance": 0.755
+      },
+      {
+        "robot_id": "robot_2",
+        "x": 1.825,
+        "y": -0.025,
+        "path_length": 4.17,
+        "path_pose_count": 165,
+        "map_clearance": 0.87
+      }
+    ],
+    "metrics": {
+      "target_separation": 3.622,
+      "total_nav2_path_length": 4.451,
+      "requested_clearance": 0.55,
+      "sample_covering_radius": 3.774
+    },
+    "evidence": {
+      "map": "rdl_warehouse.yaml",
+      "map_fingerprint": "71e67edd91c1e147",
+      "resolution": 0.05,
+      "sampling_spacing": 0.4,
+      "safe_candidate_count": 107,
+      "pair_search_limit": 12,
+      "planning_time_budget_seconds": 20.0,
+      "route_validation": "Nav2 ComputePathToPose",
+      "algorithm": "inflated_occupancy_pair_search_v2",
+      "optimality": "bounded_sample_search_not_global_optimum",
+      "metric": "euclidean_distance",
+      "scope": "static_map_safe_positions_with_live_nav2_routes",
+      "checked_pair_count": 1,
+      "nav2_query_count": 2
+    }
+  },
+  "assigned_targets": {
+    "robot_1": [
+      -1.775,
+      -0.425
+    ],
+    "robot_2": [
+      1.825,
+      -0.025
+    ]
+  },
+  "runs": [
+    {
+      "run_id": "bd8e39a8cfb0",
+      "robot_id": "robot_1",
+      "status": "verified",
+      "final_gazebo_error": 0.1063
+    },
+    {
+      "run_id": "9d1ff531c183",
+      "robot_id": "robot_2",
+      "status": "verified",
+      "final_gazebo_error": 0.0716
+    }
+  ],
+  "fleet_acceptance": {
+    "success": true,
+    "source": "gazebo_ground_truth",
+    "objective": "balanced_coverage",
+    "target_separation": 3.622,
+    "actual_separation": 3.68,
+    "separation_error": 0.058,
+    "robot_target_errors": {
+      "robot_1": 0.098,
+      "robot_2": 0.07
+    },
+    "poses": {
+      "robot_1": {
+        "x": -1.840111871324735,
+        "y": -0.4984358500948255,
+        "theta": 0.017710006605500105,
+        "speed": 0.0,
+        "observed": 1793607819.3033864,
+        "source": "gazebo_odometry"
+      },
+      "robot_2": {
+        "x": 1.8000271938443917,
+        "y": 0.04088705949743937,
+        "theta": -0.1627996975369768,
+        "speed": 0.0,
+        "observed": 1793607819.3037271,
+        "source": "gazebo_odometry"
+      }
+    },
+    "position_threshold": 0.35,
+    "minimum_robot_separation": 0.65,
+    "run_statuses": {
+      "robot_1": "verified",
+      "robot_2": "verified"
+    }
+  },
+  "final_poses": {
+    "robot_1": {
+      "x": -1.840111871324735,
+      "y": -0.4984358500948255,
+      "theta": 0.017710006605500105,
+      "speed": 0.0,
+      "observed": 1793607819.3772938,
+      "source": "gazebo_odometry"
+    },
+    "robot_2": {
+      "x": 1.8000271938443917,
+      "y": 0.04088705949743937,
+      "theta": -0.1627996975369768,
+      "speed": 0.0,
+      "observed": 1793607819.377978,
+      "source": "gazebo_odometry"
+    }
+  },
+  "nav2_online_after": {
+    "robot_1": true,
+    "robot_2": true
+  }
+}

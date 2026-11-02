@@ -39,6 +39,16 @@
 
 **第三阶段后端已完成。** Gazebo中现在有两台实体TurtleBot3，各自使用`/robot_1`和`/robot_2`命名空间运行独立雷达、里程计、TF、AMCL和Nav2。车队OpenFang Agent查询实时车队状态与统一语义地点，输出结构化分工；后端执行原子分派、唯一充电站约束、真实Nav2整路预约和可审计的失败任务接替。路线等待有明确上限，超时会形成独立失败记录，再由已经通过验收的机器人接替可迁移目标，不会无限等待。提交的[可重复车队评测矩阵](docs/fleet-evaluation-results.json)完成6个场景、3轮、AI/规则两种模式，共36个真实用例，全部通过：并行执行、交叉交通、等待超时接替、雷达链路恢复、Nav2 lifecycle恢复和未修复故障接替。每个场景每轮只生成一份经过验证的模型计划供两种模式共同重放；全部结果使用Gazebo独立验收，AI故障运行均调用模型调查工具，错误修复和全局路线降级均为0。带时间维度的MAPF、两台以上车队和实体机器人安全层属于本阶段之外的研究扩展。
 
+第三阶段还增加了通用空间任务分析：Agent可为“最大分离、均衡覆盖、安全会合”选择目标，但安全站位由确定性工具从Nav2实际占据地图计算。工具按机器人安全间距膨胀障碍物，并要求两台机器人的`ComputePathToPose`都返回真实路径；Agent不能交换或修改工具绑定的坐标。2026-11-02 三类自然语言目标均完成真实双机器人验收：
+
+| 空间目标 | 验收记录 | 安全候选 | 目标间距 | Gazebo 实测 | 结果 |
+| --- | --- | ---: | ---: | ---: | --- |
+| 最大安全分离 | [JSON](docs/spatial-fleet-acceptance-results.json) | 106 | 8.246 m | 8.220 m | 2/2 verified |
+| 安全会合 | [JSON](docs/spatial-rendezvous-results.json) | 106 | 0.800 m | 0.995 m | 2/2 verified |
+| 均衡覆盖站位 | [JSON](docs/spatial-coverage-results.json) | 107 | 3.622 m | 3.680 m | 2/2 verified |
+
+空间分析采用0.40 m候选点采样、最多12组点对和有时限的Nav2路径核验，因此提供的是近似可行站位，不保证全地图全局最优。距离指地图中的欧氏距离；均衡覆盖以安全采样点到较近机器人的最坏距离评分，表示两个静态站位，不表示已经完成巡检。候选生成使用静态占据地图，动态障碍仍由Nav2处理。两机空间任务禁止单机接替，验收要求新鲜的Gazebo真值、两机到位和最小分离距离。
+
 ## 系统结构
 
 ```mermaid
@@ -46,6 +56,8 @@ flowchart LR
   UI[React 调试台] --> API[FastAPI 任务网关]
   API --> Nav2[Nav2 导航任务]
   API --> Fleet[OpenFang 车队 Agent]
+  Fleet --> Spatial[Nav2占据地图安全站位分析]
+  Spatial -->|双机可达目标| Batch
   Fleet --> Batch[原子分派与共享资源约束]
   Batch --> Traffic[真实Nav2路径冲突检查与整路预约]
   Traffic --> R1[Robot 01 Agent + Nav2]
@@ -105,6 +117,7 @@ AI 模式需要在 `.env` 配置直连模型，或设置 `RDL_AGENT_BACKEND=open
 6. 选择“模型 AI”，勾选限定修复，点击“开始诊断”，在时间线查看证据、修复和同目标复测。
 7. 切换“规则基线”重复实验，对比事件数、结论和 token 消耗。
 8. 在自然语言任务中选择“车队协同 Agent”，输入“让更合适的一台去货架A，另一台去充电站并等待5秒”，查看模型读取实时车队状态、生成分工并同时执行。保留“允许健康机器人接替”勾选项可在单机无法完成时转交剩余的可迁移步骤；原失败记录仍会保留。
+9. 输入“两个机器人找到相互之间的最远距离”，查看Agent调用空间分析工具、展示地图候选点和Nav2路径证据，再由Gazebo显示并验收两台机器人的最终实测间距。
 
 自动验收命令会重置仿真并执行完整故障闭环：
 
@@ -117,6 +130,10 @@ AI 模式需要在 `.env` 配置直连模型，或设置 `RDL_AGENT_BACKEND=open
 .venv/bin/python scripts/acceptance_fleet.py --reset
 .venv/bin/python scripts/acceptance_fleet_handoff.py --output docs/fleet-handoff-results.json
 .venv/bin/python scripts/acceptance_fleet_traffic.py --output docs/fleet-traffic-results.json
+.venv/bin/python scripts/acceptance_spatial_fleet.py --output docs/spatial-fleet-acceptance-results.json
+# 分别验证其他两个空间目标
+.venv/bin/python scripts/acceptance_spatial_fleet.py --objective rendezvous --output docs/spatial-rendezvous-results.json
+.venv/bin/python scripts/acceptance_spatial_fleet.py --objective balanced_coverage --output docs/spatial-coverage-results.json
 .venv/bin/python scripts/evaluate_fleet_matrix.py --scenario all --mode both --trials 3 --resume --output docs/fleet-evaluation-results.json
 .venv/bin/python scripts/evaluate_fault_matrix.py --mode both
 .venv/bin/python scripts/evaluate_mission_faults.py --fault all --mode both --trials 3 --resume

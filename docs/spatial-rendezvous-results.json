@@ -1,0 +1,159 @@
+{
+  "recorded_at": "2026-11-02T08:21:44.139733+00:00",
+  "elapsed_seconds": 51.515,
+  "plan_id": "399d1368cc59",
+  "prompt": "让两台机器人到合适的位置安全会合，彼此保持安全距离，停好即可",
+  "planner_backend": "openfang",
+  "planning_usage": {
+    "prompt_tokens": 21104,
+    "completion_tokens": 706
+  },
+  "tool_calls": [
+    "get_fleet_state",
+    "analyze_fleet_poses"
+  ],
+  "initial_poses": {
+    "robot_1": {
+      "x": -1.999999903452644,
+      "y": -0.49999999999999994,
+      "theta": 9.197018780736316e-10,
+      "speed": 1.102907483404037e-21,
+      "observed": 1793607694.5879214,
+      "source": "gazebo_odometry"
+    },
+    "robot_2": {
+      "x": -1.999999903452644,
+      "y": 0.5,
+      "theta": 9.197018780743702e-10,
+      "speed": 4.632211430296955e-21,
+      "observed": 1793607694.510779,
+      "source": "gazebo_odometry"
+    }
+  },
+  "analysis": {
+    "resolved": true,
+    "objective": "rendezvous",
+    "assignments": [
+      {
+        "robot_id": "robot_1",
+        "x": -1.775,
+        "y": -0.425,
+        "path_length": 0.327,
+        "path_pose_count": 11,
+        "map_clearance": 0.755
+      },
+      {
+        "robot_id": "robot_2",
+        "x": -1.775,
+        "y": 0.375,
+        "path_length": 0.296,
+        "path_pose_count": 10,
+        "map_clearance": 0.792
+      }
+    ],
+    "metrics": {
+      "target_separation": 0.8,
+      "total_nav2_path_length": 0.623,
+      "requested_clearance": 0.6,
+      "sample_covering_radius": 6.261
+    },
+    "evidence": {
+      "map": "rdl_warehouse.yaml",
+      "map_fingerprint": "71e67edd91c1e147",
+      "resolution": 0.05,
+      "sampling_spacing": 0.4,
+      "safe_candidate_count": 106,
+      "pair_search_limit": 12,
+      "planning_time_budget_seconds": 20.0,
+      "route_validation": "Nav2 ComputePathToPose",
+      "algorithm": "inflated_occupancy_pair_search_v2",
+      "optimality": "bounded_sample_search_not_global_optimum",
+      "metric": "euclidean_distance",
+      "scope": "static_map_safe_positions_with_live_nav2_routes",
+      "checked_pair_count": 1,
+      "nav2_query_count": 2
+    }
+  },
+  "assigned_targets": {
+    "robot_1": [
+      -1.775,
+      -0.425
+    ],
+    "robot_2": [
+      -1.775,
+      0.375
+    ]
+  },
+  "runs": [
+    {
+      "run_id": "4fcf36534ee5",
+      "robot_id": "robot_1",
+      "status": "verified",
+      "final_gazebo_error": 0.0926
+    },
+    {
+      "run_id": "04fd2f6bbbf4",
+      "robot_id": "robot_2",
+      "status": "verified",
+      "final_gazebo_error": 0.1282
+    }
+  ],
+  "fleet_acceptance": {
+    "success": true,
+    "source": "gazebo_ground_truth",
+    "objective": "rendezvous",
+    "target_separation": 0.8,
+    "actual_separation": 0.995,
+    "separation_error": 0.195,
+    "robot_target_errors": {
+      "robot_1": 0.091,
+      "robot_2": 0.127
+    },
+    "poses": {
+      "robot_1": {
+        "x": -1.8299618015054444,
+        "y": -0.4973482335115671,
+        "theta": 0.02781073723507961,
+        "speed": 0.0,
+        "observed": 1793607703.8667443,
+        "source": "gazebo_odometry"
+      },
+      "robot_2": {
+        "x": -1.8071489188405048,
+        "y": 0.4974230560868329,
+        "theta": -0.01767960204368984,
+        "speed": 8.192520735879801e-13,
+        "observed": 1793607703.8666134,
+        "source": "gazebo_odometry"
+      }
+    },
+    "position_threshold": 0.35,
+    "minimum_robot_separation": 0.65,
+    "run_statuses": {
+      "robot_1": "verified",
+      "robot_2": "verified"
+    }
+  },
+  "final_poses": {
+    "robot_1": {
+      "x": -1.8299618015054444,
+      "y": -0.4973482335115671,
+      "theta": 0.02781073723507961,
+      "speed": 0.0,
+      "observed": 1793607703.9751484,
+      "source": "gazebo_odometry"
+    },
+    "robot_2": {
+      "x": -1.8071489188405048,
+      "y": 0.4974230560868329,
+      "theta": -0.01767960204368984,
+      "speed": 0.0,
+      "observed": 1793607703.9757473,
+      "source": "gazebo_odometry"
+    }
+  },
+  "nav2_online_after": {
+    "robot_1": true,
+    "robot_2": true
+  }
+}

@@ -356,6 +356,29 @@ def _validate_stored_fleet_plan(plan):
     scene = app.state.supervisor.scene
     coordinates = explicit_coordinates(plan.get("request_text", ""))
     from .config import ROBOT_STARTS, ROBOTS
+    from .spatial import map_fingerprint, final_navigation_targets
+
+    spatial_targets = {}
+    spatial_analysis = plan.get("spatial_analysis")
+    if spatial_analysis is not None:
+        try:
+            if not spatial_analysis.get("resolved"):
+                raise ValueError
+            evidence = spatial_analysis["evidence"]
+            if evidence["map_fingerprint"] != map_fingerprint():
+                raise ValueError("占据地图已变化，请重新执行空间分析")
+            spatial_targets = {
+                item["robot_id"]: (float(item["x"]), float(item["y"]))
+                for item in spatial_analysis["assignments"]
+            }
+            if set(spatial_targets) != set(ROBOTS):
+                raise ValueError
+        except ValueError as error:
+            if str(error):
+                raise
+            raise ValueError("存储车队计划包含无效空间分析证据") from None
+        except (KeyError, TypeError):
+            raise ValueError("存储车队计划包含无效空间分析证据") from None
 
     try:
         traffic_timeout = float(plan.get("traffic_wait_timeout_seconds", 45.0))
@@ -392,8 +415,10 @@ def _validate_stored_fleet_plan(plan):
                     point = (float(step["x"]), float(step["y"]))
                 except (KeyError, TypeError, ValueError):
                     raise ValueError("存储车队计划包含无效坐标，请重新规划") from None
-                if point not in coordinates:
-                    raise ValueError("存储车队计划包含未经用户明确提供的坐标")
+                if point not in coordinates and spatial_targets.get(robot) != point:
+                    raise ValueError(
+                        "存储车队计划包含未经用户明确提供或空间分析工具授权的坐标"
+                    )
                 expected = {"x": point[0], "y": point[1]}
             try:
                 changed = any(
@@ -404,6 +429,12 @@ def _validate_stored_fleet_plan(plan):
                 raise ValueError("存储车队计划包含无效坐标，请重新规划") from None
             if changed:
                 raise ValueError("车队语义场景坐标已变化，请重新规划")
+    if spatial_targets:
+        planned_targets = final_navigation_targets(assignments)
+        if planned_targets != spatial_targets:
+            raise ValueError("空间任务没有完整保留工具生成的双机器人站位")
+        if plan.get("allow_handoff"):
+            raise ValueError("双机器人空间目标不允许单机接替")
 
 
 def _dispatch_fleet_plan(plan, recovery_mode):

@@ -20,6 +20,8 @@ Two TurtleBot3 robots execute real, namespaced Nav2 goals in one repository-owne
 - When the stack is healthy but a reviewed semantic approach fails in execution, a separate Agent may select only a Nav2-verified alternative approach while completed and later mission steps remain unchanged.
 - Nav2 remains responsible for planning and control; the model never publishes velocity commands.
 - A separate OpenFang fleet Agent reads both robots' live poses and health plus the semantic registry, then returns one structured mission per selected robot. The gateway reserves the whole batch before starting either mission and enforces the single charging-station capacity.
+- For separation, balanced-coverage and rendezvous requests, a deterministic spatial tool inflates the actual Nav2 occupancy map, searches safe pose pairs, and requires `ComputePathToPose` evidence for both robots. The Agent may select the objective but cannot change or swap the tool-bound coordinates. Gazebo ground truth independently checks both final poses and their actual separation.
+- Spatial results are approximate: 0.40 m candidate sampling, at most 12 pairs and a bounded live Nav2 search do not prove a global optimum. Distance is Euclidean. Coverage minimizes the worst nearest-robot distance over safe samples and means two static positions, not completed patrol or inspection. Dynamic obstacles remain Nav2's responsibility; paired goals cannot be handed off to one robot.
 - If one fleet mission remains failed after its own recovery policy, an explicit deterministic handoff policy can transfer only the portable unfinished suffix to the verified peer. The source failure remains visible and the handoff is accepted independently against Gazebo.
 - Before each fleet navigation, the deterministic gateway previews the actual Nav2 path and atomically reserves its spatial footprint. Conflicting routes wait, disjoint routes remain parallel, and no robot can hold only part of a route while waiting for another part.
 - Route reservations have a bounded wait. An expired wait is recorded as a distinct, reassignable failure, after which the verified peer may execute the portable unfinished goal as a separately accepted run.
@@ -58,6 +60,9 @@ Run the live incident acceptance against a running server:
 .venv/bin/python scripts/acceptance_fleet.py --reset
 .venv/bin/python scripts/acceptance_fleet_handoff.py --output docs/fleet-handoff-results.json
 .venv/bin/python scripts/acceptance_fleet_traffic.py --output docs/fleet-traffic-results.json
+.venv/bin/python scripts/acceptance_spatial_fleet.py --output docs/spatial-fleet-acceptance-results.json
+.venv/bin/python scripts/acceptance_spatial_fleet.py --objective rendezvous --output docs/spatial-rendezvous-results.json
+.venv/bin/python scripts/acceptance_spatial_fleet.py --objective balanced_coverage --output docs/spatial-coverage-results.json
 .venv/bin/python scripts/evaluate_fleet_matrix.py --scenario all --mode both --trials 3 --resume --output docs/fleet-evaluation-results.json
 .venv/bin/python scripts/evaluate_fault_matrix.py --mode both
 .venv/bin/python scripts/evaluate_mission_faults.py --fault all --mode both --trials 3 --resume
@@ -71,6 +76,8 @@ Run the live incident acceptance against a running server:
 flowchart LR
   UI[React dashboard] --> API[FastAPI gateway]
   API --> Fleet[OpenFang fleet planner]
+  Fleet --> Spatial[Safe occupancy-map pose analysis]
+  Spatial -->|two Nav2-verified targets| Guard0
   Fleet --> Guard0[Atomic batch and resource guard]
   Guard0 --> Traffic[Real Nav2 path reservation]
   Traffic --> R1[Robot 01 Agent + Nav2]
@@ -104,7 +111,7 @@ A fourth mechanism now corrupts AMCL through the real `/initialpose` interface w
 
 **Phase 2 backend is complete:** four distinct ROS/Nav2 failures, AI-versus-rules comparison, mid-mission recovery, automated evaluation, and combined system-plus-route recovery are implemented. The original three-mechanism matrix passed 18 live runs; localization drift additionally passed direct and ordered-mission AI/rules comparisons. Costmap-derived candidate generation, general conditional task graphs, restart resumption, and physical manipulation remain later extensions.
 
-**Phase 3 backend is complete:** two physical Gazebo robot entities now run independent namespaced sensor, TF, AMCL and Nav2 stacks in one shared world. An OpenFang fleet Agent queries live fleet state and semantic destinations, proposes assignments, and the deterministic workflow atomically starts both missions. Per-robot faults remain isolated, portable unfinished steps can be handed to the verified peer, and crossing Nav2 routes use bounded full-route reservations. A reservation timeout is recorded and can trigger deterministic reassignment instead of waiting forever. The committed [repeatable fleet matrix](docs/fleet-evaluation-results.json) passed 36/36 live cases: six scenarios, three trials, and AI/rules comparison using one validated plan per scenario and trial. It covers parallel work, crossing traffic, timeout handoff, scan recovery, lifecycle recovery and unrepaired-fault handoff, with independent Gazebo acceptance, model tools on every AI fault run, zero wrong repairs and zero global traffic fallbacks. Time-aware MAPF, fleets larger than two robots and physical-fleet safety remain research extensions outside this phase.
+**Phase 3 backend is complete:** two physical Gazebo robot entities now run independent namespaced sensor, TF, AMCL and Nav2 stacks in one shared world. An OpenFang fleet Agent queries live fleet state and semantic destinations, proposes assignments, and the deterministic workflow atomically starts both missions. Per-robot faults remain isolated, portable unfinished steps can be handed to the verified peer, and crossing Nav2 routes use bounded full-route reservations. A reservation timeout is recorded and can trigger deterministic reassignment instead of waiting forever. The committed [repeatable fleet matrix](docs/fleet-evaluation-results.json) passed 36/36 live cases: six scenarios, three trials, and AI/rules comparison using one validated plan per scenario and trial. It covers parallel work, crossing traffic, timeout handoff, scan recovery, lifecycle recovery and unrepaired-fault handoff, with independent Gazebo acceptance, model tools on every AI fault run, zero wrong repairs and zero global traffic fallbacks. Three subsequent live spatial acceptances verified [maximum separation](docs/spatial-fleet-acceptance-results.json), [safe rendezvous](docs/spatial-rendezvous-results.json), and [balanced static coverage](docs/spatial-coverage-results.json). OpenFang selected the correct map-analysis objective for each natural-language request; all six robot runs verified, and Gazebo measured final separations of 8.220 m, 0.995 m, and 3.680 m respectively. Time-aware MAPF, fleets larger than two robots and physical-fleet safety remain research extensions outside this phase.
 
 ## Real Nav2 source case
 
