@@ -1,0 +1,661 @@
+{
+  "experiment_id": "unseen-transform-frozen-v1",
+  "experiment": "unseen-transform-diagnostic-ablation",
+  "created": 1793626204.7831836,
+  "prompt_version": "diagnostic-structure-v1-frozen",
+  "true_cause_location": "private experiment_labels table only",
+  "fault_mechanism": "AMCL remains active but its real tf_broadcast parameter is disabled",
+  "target": [
+    2.0,
+    0.5
+  ],
+  "task": "排查机器人无法到达目标的原因，逐步收集现场证据并给出结论。",
+  "trials_per_strategy": 2,
+  "strategies": [
+    "rules",
+    "no_tools_llm",
+    "tools_llm"
+  ],
+  "server": {
+    "contract_version": "2.0",
+    "model": "default",
+    "backend": "openfang",
+    "simulation": "nav2"
+  },
+  "trials": [
+    {
+      "strategy": "rules",
+      "repetition": 1,
+      "result": {
+        "run_id": "69521bfc891d",
+        "phase": "escalated",
+        "status": "unresolved",
+        "model": "none",
+        "backend": "rules",
+        "prompt_version": "diagnostic-structure-v1-frozen",
+        "wall_seconds": 0.521,
+        "diagnosis": {
+          "strategy": "rules",
+          "classification": "healthy",
+          "known_cause": null,
+          "suspected_subsystem": "unknown",
+          "summary": "规则基线：healthy",
+          "cited_evidence": [
+            "E5",
+            "E6"
+          ],
+          "repair_requested": false,
+          "recommended_action": "根据节点、连接关系与参数匹配固定规则。"
+        },
+        "repair_authorization": {
+          "schema_version": 2,
+          "decision": "not_applicable",
+          "known_cause": null,
+          "requested_operation": null,
+          "authorized_operation": null,
+          "rule_version": "repair-allowlist-v1",
+          "checked_at": 1793626245.8048074,
+          "max_evidence_age_seconds": 2.0,
+          "evidence_ids": [
+            "E8"
+          ],
+          "checks": [
+            {
+              "name": "fresh_mechanism_matches_requested_repair",
+              "passed": false,
+              "expected": null,
+              "actual": "healthy"
+            }
+          ],
+          "reason": "诊断未申请白名单修复"
+        },
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0
+        },
+        "tool_calls": 3,
+        "navigation_attempts": 1,
+        "event_count": 11,
+        "error": null
+      },
+      "error": null,
+      "precondition": {
+        "healthy_all_available": true,
+        "fault_all_available": false,
+        "fault_transforms": {
+          "robot_id": "robot_1",
+          "required": [
+            {
+              "edge": "map->odom",
+              "available": false,
+              "age_seconds": 1.829,
+              "static": false
+            },
+            {
+              "edge": "odom->base_footprint",
+              "available": true,
+              "age_seconds": 0.003,
+              "static": false
+            },
+            {
+              "edge": "base_footprint->base_link",
+              "available": true,
+              "age_seconds": 10.372,
+              "static": true
+            }
+          ],
+          "all_available": false,
+          "bt_navigator_state": "active",
+          "localization_state": "active",
+          "observed": 1793626245.3609204
+        }
+      }
+    },
+    {
+      "strategy": "rules",
+      "repetition": 2,
+      "result": {
+        "run_id": "bd8bcaadc5e2",
+        "phase": "escalated",
+        "status": "unresolved",
+        "model": "none",
+        "backend": "rules",
+        "prompt_version": "diagnostic-structure-v1-frozen",
+        "wall_seconds": 0.514,
+        "diagnosis": {
+          "strategy": "rules",
+          "classification": "healthy",
+          "known_cause": null,
+          "suspected_subsystem": "unknown",
+          "summary": "规则基线：healthy",
+          "cited_evidence": [
+            "E5",
+            "E6"
+          ],
+          "repair_requested": false,
+          "recommended_action": "根据节点、连接关系与参数匹配固定规则。"
+        },
+        "repair_authorization": {
+          "schema_version": 2,
+          "decision": "not_applicable",
+          "known_cause": null,
+          "requested_operation": null,
+          "authorized_operation": null,
+          "rule_version": "repair-allowlist-v1",
+          "checked_at": 1793626288.3565617,
+          "max_evidence_age_seconds": 2.0,
+          "evidence_ids": [
+            "E8"
+          ],
+          "checks": [
+            {
+              "name": "fresh_mechanism_matches_requested_repair",
+              "passed": false,
+              "expected": null,
+              "actual": "healthy"
+            }
+          ],
+          "reason": "诊断未申请白名单修复"
+        },
+        "usage": {
+          "prompt_tokens": 0,
+          "completion_tokens": 0
+        },
+        "tool_calls": 3,
+        "navigation_attempts": 1,
+        "event_count": 11,
+        "error": null
+      },
+      "error": null,
+      "precondition": {
+        "healthy_all_available": true,
+        "fault_all_available": false,
+        "fault_transforms": {
+          "robot_id": "robot_1",
+          "required": [
+            {
+              "edge": "map->odom",
+              "available": false,
+              "age_seconds": 1.73,
+              "static": false
+            },
+            {
+              "edge": "odom->base_footprint",
+              "available": true,
+              "age_seconds": 0.003,
+              "static": false
+            },
+            {
+              "edge": "base_footprint->base_link",
+              "available": true,
+              "age_seconds": 10.27,
+              "static": true
+            }
+          ],
+          "all_available": false,
+          "bt_navigator_state": "active",
+          "localization_state": "active",
+          "observed": 1793626287.9102213
+        }
+      }
+    },
+    {
+      "strategy": "no_tools_llm",
+      "repetition": 1,
+      "result": {
+        "run_id": "aac5a8e12ba5",
+        "phase": "escalated",
+        "status": "unresolved",
+        "model": "default",
+        "backend": "openfang",
+        "prompt_version": "diagnostic-structure-v1-frozen",
+        "wall_seconds": 13.128,
+        "diagnosis": {
+          "strategy": "no_tools_llm",
+          "classification": "known_fault",
+          "known_cause": "localization_drift",
+          "suspected_subsystem": "localization",
+          "summary": "Nav2在0.4秒内即失败，报错为无法将目标末端位姿变换到全局坐标系，且结束时位姿[-2.0,-0.5]恰好是目标[2.0,0.5]的180°反向，符合定位（map→odom）与物理真值严重不一致、AMCL位姿漂移的特征。",
+          "cited_evidence": [
+            "E3"
+          ],
+          "repair_requested": true,
+          "recommended_action": "使用Gazebo物理真值重新初始化AMCL位姿，随后立即检查map→odom→base_link变换是否连续一致；若重定位后仍出现同类变换失败，则按TF子系统问题转人工排查。"
+        },
+        "repair_authorization": {
+          "schema_version": 2,
+          "decision": "denied",
+          "known_cause": "localization_drift",
+          "requested_operation": "reseed_amcl_from_gazebo_truth",
+          "authorized_operation": null,
+          "rule_version": "repair-allowlist-v1",
+          "checked_at": 1793626340.9830422,
+          "max_evidence_age_seconds": 2.0,
+          "evidence_ids": [
+            "E7"
+          ],
+          "checks": [
+            {
+              "name": "fresh_mechanism_matches_requested_repair",
+              "passed": false,
+              "expected": "localization_drift",
+              "actual": "healthy"
+            }
+          ],
+          "reason": "新鲜服务器侧证据不支持请求的修复"
+        },
+        "usage": {
+          "prompt_tokens": 4243,
+          "completion_tokens": 1764
+        },
+        "tool_calls": 1,
+        "navigation_attempts": 1,
+        "event_count": 10,
+        "error": null
+      },
+      "error": null,
+      "precondition": {
+        "healthy_all_available": true,
+        "fault_all_available": false,
+        "fault_transforms": {
+          "robot_id": "robot_1",
+          "required": [
+            {
+              "edge": "map->odom",
+              "available": false,
+              "age_seconds": 1.813,
+              "static": false
+            },
+            {
+              "edge": "odom->base_footprint",
+              "available": true,
+              "age_seconds": 0.014,
+              "static": false
+            },
+            {
+              "edge": "base_footprint->base_link",
+              "available": true,
+              "age_seconds": 10.419,
+              "static": true
+            }
+          ],
+          "all_available": false,
+          "bt_navigator_state": "active",
+          "localization_state": "active",
+          "observed": 1793626328.2605944
+        }
+      }
+    },
+    {
+      "strategy": "no_tools_llm",
+      "repetition": 2,
+      "result": {
+        "run_id": "b1a68af477b1",
+        "phase": "escalated",
+        "status": "unresolved",
+        "model": "default",
+        "backend": "openfang",
+        "prompt_version": "diagnostic-structure-v1-frozen",
+        "wall_seconds": 8.058,
+        "diagnosis": {
+          "strategy": "no_tools_llm",
+          "classification": "unknown_fault",
+          "known_cause": null,
+          "suspected_subsystem": "tf",
+          "summary": "Nav2 在 0.4 秒内即失败，报错“Failed to transform end pose to global frame”，说明目标位姿从任务坐标系换算到 global frame 时坐标变换不可用；同时最终位姿 [-2.0, -0.5] 恰为目标 [2.0, 0.5] 的符号取反，提示存在坐标系约定或 TF 链方向性问题。该现象不属于已知原因枚举中的传感器中断、生命周期未激活、速度限幅为零或定位漂移，故判定为未知故障，怀疑子系统为 TF，建议人工排查。",
+          "cited_evidence": [
+            "E3"
+          ],
+          "repair_requested": false,
+          "recommended_action": "人工检查 TF 树完整性（map→odom→base_link 是否连通、时间戳是否新鲜）及坐标系轴约定，重点核实为何报告位姿为目标位姿的符号取反，并确认 global frame 名称配置是否正确。"
+        },
+        "repair_authorization": {
+          "schema_version": 2,
+          "decision": "not_applicable",
+          "known_cause": null,
+          "requested_operation": null,
+          "authorized_operation": null,
+          "rule_version": "repair-allowlist-v1",
+          "checked_at": 1793626390.8501468,
+          "max_evidence_age_seconds": 2.0,
+          "evidence_ids": [
+            "E7"
+          ],
+          "checks": [
+            {
+              "name": "fresh_mechanism_matches_requested_repair",
+              "passed": false,
+              "expected": null,
+              "actual": "healthy"
+            }
+          ],
+          "reason": "诊断未申请白名单修复"
+        },
+        "usage": {
+          "prompt_tokens": 4236,
+          "completion_tokens": 1021
+        },
+        "tool_calls": 1,
+        "navigation_attempts": 1,
+        "event_count": 10,
+        "error": null
+      },
+      "error": null,
+      "precondition": {
+        "healthy_all_available": true,
+        "fault_all_available": false,
+        "fault_transforms": {
+          "robot_id": "robot_1",
+          "required": [
+            {
+              "edge": "map->odom",
+              "available": false,
+              "age_seconds": 1.876,
+              "static": false
+            },
+            {
+              "edge": "odom->base_footprint",
+              "available": true,
+              "age_seconds": 0.006,
+              "static": false
+            },
+            {
+              "edge": "base_footprint->base_link",
+              "available": true,
+              "age_seconds": 10.271,
+              "static": true
+            }
+          ],
+          "all_available": false,
+          "bt_navigator_state": "active",
+          "localization_state": "active",
+          "observed": 1793626383.100041
+        }
+      }
+    },
+    {
+      "strategy": "tools_llm",
+      "repetition": 1,
+      "result": {
+        "run_id": "b08a93ace1c6",
+        "phase": "escalated",
+        "status": "unresolved",
+        "model": "default",
+        "backend": "openfang",
+        "prompt_version": "diagnostic-structure-v1-frozen",
+        "wall_seconds": 12.119,
+        "diagnosis": {
+          "strategy": "tools_llm",
+          "classification": "unknown_fault",
+          "known_cause": null,
+          "suspected_subsystem": "tf",
+          "summary": "map->odom 变换缺失且持续老化（E7 3.281s → E12 6.771s，available=false），而 localization_state 仍报 active、AMCL 位姿时间戳明显滞后（E5）。导航在 0.4s 内即失败，报错即“Failed to transform end pose to global frame”，机器人未产生任何位移（E10）。属于 TF/定位源输出缺失，不在已知原因枚举内。",
+          "cited_evidence": [
+            "E7",
+            "E12",
+            "E5",
+            "E10",
+            "E9",
+            "E8"
+          ],
+          "repair_requested": false,
+          "recommended_action": "建议人工介入：检查 AMCL/定位节点是否真正发布 map->odom（生命周期 active 但话题/变换无输出），排查定位节点与 TF 广播链路（含 ROS_DOMAIN/QoS 配置）后重新触发导航验证。"
+        },
+        "repair_authorization": {
+          "schema_version": 2,
+          "decision": "not_applicable",
+          "known_cause": null,
+          "requested_operation": null,
+          "authorized_operation": null,
+          "rule_version": "repair-allowlist-v1",
+          "checked_at": 1793626443.9011042,
+          "max_evidence_age_seconds": 2.0,
+          "evidence_ids": [
+            "E15"
+          ],
+          "checks": [
+            {
+              "name": "fresh_mechanism_matches_requested_repair",
+              "passed": false,
+              "expected": null,
+              "actual": "healthy"
+            }
+          ],
+          "reason": "诊断未申请白名单修复"
+        },
+        "usage": {
+          "prompt_tokens": 25477,
+          "completion_tokens": 1224
+        },
+        "tool_calls": 7,
+        "navigation_attempts": 1,
+        "event_count": 18,
+        "error": null
+      },
+      "error": null,
+      "precondition": {
+        "healthy_all_available": true,
+        "fault_all_available": false,
+        "fault_transforms": {
+          "robot_id": "robot_1",
+          "required": [
+            {
+              "edge": "map->odom",
+              "available": false,
+              "age_seconds": 1.704,
+              "static": false
+            },
+            {
+              "edge": "odom->base_footprint",
+              "available": true,
+              "age_seconds": 0.014,
+              "static": false
+            },
+            {
+              "edge": "base_footprint->base_link",
+              "available": true,
+              "age_seconds": 9.996,
+              "static": true
+            }
+          ],
+          "all_available": false,
+          "bt_navigator_state": "active",
+          "localization_state": "active",
+          "observed": 1793626432.0652843
+        }
+      }
+    },
+    {
+      "strategy": "tools_llm",
+      "repetition": 2,
+      "result": {
+        "run_id": "3d722b0edb67",
+        "phase": "escalated",
+        "status": "unresolved",
+        "model": "default",
+        "backend": "openfang",
+        "prompt_version": "diagnostic-structure-v1-frozen",
+        "wall_seconds": 16.664,
+        "diagnosis": {
+          "strategy": "tools_llm",
+          "classification": "unknown_fault",
+          "known_cause": null,
+          "suspected_subsystem": "tf",
+          "summary": "必需的 map->odom 变换缺失：E7 显示 age 3.876s 不可用，E12 恶化到 7.46s 仍不可用，而 odom->base_footprint（0.008s）与静态 base_footprint->base_link 均正常，说明 TF 链在 map 一层断裂。同时 amcl_pose 时间戳停留在 1793626480（E13，比当前晚约 11s 未更新），却仍报 aligned、误差 0.0337（<0.45），即 AMCL 有位姿但停止发布/更新 map->odom。baseline 报错 \"Failed to transform end pose to global frame\" 与此一致。其余环节正常：扫描转发与速率一致（E9）、bt_navigator 为 active（E13）、控制器速度限幅在批准范围内（E8）、Gazebo 位移为 0（E10）是因变换失败后未产生运动指令。此故障不属枚举已知原因（非 AMCL 位姿偏移导致的 drift），建议人工排查 AMCL 的 map->odom 发布链路。",
+          "cited_evidence": [
+            "E7",
+            "E12",
+            "E13",
+            "E8",
+            "E9",
+            "E10"
+          ],
+          "repair_requested": false,
+          "recommended_action": "人工介入排查 AMCL：确认 /robot_1/amcl 是否在正常发布 map->odom（当前该变换不可用且持续老化至 7.46s，amcl_pose 时间戳约 11s 未更新），检查其 TF 发布器、map 帧绑定与 AMCL 内部定时器/回调是否卡死；暂不执行任何自动修复。"
+        },
+        "repair_authorization": {
+          "schema_version": 2,
+          "decision": "not_applicable",
+          "known_cause": null,
+          "requested_operation": null,
+          "authorized_operation": null,
+          "rule_version": "repair-allowlist-v1",
+          "checked_at": 1793626502.777527,
+          "max_evidence_age_seconds": 2.0,
+          "evidence_ids": [
+            "E16"
+          ],
+          "checks": [
+            {
+              "name": "fresh_mechanism_matches_requested_repair",
+              "passed": false,
+              "expected": null,
+              "actual": "healthy"
+            }
+          ],
+          "reason": "诊断未申请白名单修复"
+        },
+        "usage": {
+          "prompt_tokens": 26553,
+          "completion_tokens": 2413
+        },
+        "tool_calls": 8,
+        "navigation_attempts": 1,
+        "event_count": 19,
+        "error": null
+      },
+      "error": null,
+      "precondition": {
+        "healthy_all_available": true,
+        "fault_all_available": false,
+        "fault_transforms": {
+          "robot_id": "robot_1",
+          "required": [
+            {
+              "edge": "map->odom",
+              "available": false,
+              "age_seconds": 1.738,
+              "static": false
+            },
+            {
+              "edge": "odom->base_footprint",
+              "available": true,
+              "age_seconds": 0.011,
+              "static": false
+            },
+            {
+              "edge": "base_footprint->base_link",
+              "available": true,
+              "age_seconds": 7.049,
+              "static": true
+            }
+          ],
+          "all_available": false,
+          "bt_navigator_state": "active",
+          "localization_state": "active",
+          "observed": 1793626486.1907246
+        }
+      }
+    }
+  ],
+  "metrics": {
+    "contract_version": "2.0",
+    "server_time": 1793626502.861603,
+    "sample": {
+      "run_count": 6,
+      "experiment_ids": [
+        "unseen-transform-frozen-v1"
+      ],
+      "strategies": [
+        "no_tools_llm",
+        "rules",
+        "tools_llm"
+      ],
+      "unlabeled_runs_excluded": 310,
+      "small_sample_warning": true,
+      "notes": "每组样本量较少，结果仅描述本次受控实验"
+    },
+    "overall": {
+      "nav2_ok_gazebo_failed": 0,
+      "canceled": 0,
+      "failed": 0,
+      "escalated": 6,
+      "verified": 0,
+      "task_completion_rate": 0.0,
+      "wrong_repairs": 0
+    },
+    "diagnosis_by_strategy": [
+      {
+        "strategy": "no_tools_llm",
+        "model": "default",
+        "backend": "openfang",
+        "prompt_version": "diagnostic-structure-v1-frozen",
+        "trials": 2,
+        "known_fault_accuracy": 0.0,
+        "unknown_fault_classification_rate": 0.5,
+        "unknown_subsystem_accuracy": 0.5,
+        "insufficient_evidence_rate": 0.0,
+        "escalation_rate": 1.0,
+        "repair_requests": 1,
+        "repairs_authorized": 0,
+        "repairs_denied": 1,
+        "wrong_repairs": 0,
+        "average_tool_calls": 1.0,
+        "average_investigation_seconds": 9.814,
+        "average_total_tokens": 5632.0
+      },
+      {
+        "strategy": "rules",
+        "model": "none",
+        "backend": "rules",
+        "prompt_version": "diagnostic-structure-v1-frozen",
+        "trials": 2,
+        "known_fault_accuracy": 0.0,
+        "unknown_fault_classification_rate": 0.0,
+        "unknown_subsystem_accuracy": 0.0,
+        "insufficient_evidence_rate": 0.0,
+        "escalation_rate": 1.0,
+        "repair_requests": 0,
+        "repairs_authorized": 0,
+        "repairs_denied": 0,
+        "wrong_repairs": 0,
+        "average_tool_calls": 3.0,
+        "average_investigation_seconds": 0.023,
+        "average_total_tokens": 0.0
+      },
+      {
+        "strategy": "tools_llm",
+        "model": "default",
+        "backend": "openfang",
+        "prompt_version": "diagnostic-structure-v1-frozen",
+        "trials": 2,
+        "known_fault_accuracy": 0.0,
+        "unknown_fault_classification_rate": 1.0,
+        "unknown_subsystem_accuracy": 1.0,
+        "insufficient_evidence_rate": 0.0,
+        "escalation_rate": 1.0,
+        "repair_requests": 0,
+        "repairs_authorized": 0,
+        "repairs_denied": 0,
+        "wrong_repairs": 0,
+        "average_tool_calls": 7.5,
+        "average_investigation_seconds": 13.791,
+        "average_total_tokens": 27833.5
+      }
+    ],
+    "navigation": {
+      "attempts": 6,
+      "nav2_success_rate": 0.0,
+      "gazebo_verification_rate": 0.0,
+      "average_final_position_error_m": 0.0
+    },
+    "traffic": {
+      "reservations": 0,
+      "conflict_waits": 0,
+      "timeouts": 0,
+      "total_wait_seconds": 0.0
+    }
+  },
+  "completed": true,
+  "finished": 1793626542.4913642
+}
