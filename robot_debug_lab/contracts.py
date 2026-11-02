@@ -8,6 +8,7 @@ from copy import deepcopy
 
 CONTRACT_VERSION = "2.0"
 PROMPT_VERSION_UNFROZEN = "legacy-diagnostic-unfrozen"
+DIAGNOSTIC_PROMPT_VERSION = "diagnostic-structure-v1-frozen"
 
 PHASES = {
     "planned", "navigating", "waiting_route", "executing", "investigating",

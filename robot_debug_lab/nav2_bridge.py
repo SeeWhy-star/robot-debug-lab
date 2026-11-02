@@ -37,6 +37,7 @@ from rclpy.qos import (
     qos_profile_sensor_data,
 )
 from sensor_msgs.msg import LaserScan
+from tf2_msgs.msg import TFMessage
 
 from .config import ROOT, RUNTIME, ROBOTS, ROBOT_STARTS
 
@@ -131,6 +132,7 @@ class Nav2Bridge:
                 navigation_attempt=0,
                 scheduled_fault=None,
                 controller_defaults={"vx_max": 0.5, "vx_min": -0.35},
+                transform_edges={},
             )
             runtime.scan_pub = self.node.create_publisher(
                 LaserScan, f"{prefix}/scan_faulted", qos_profile_sensor_data
@@ -183,6 +185,14 @@ class Nav2Bridge:
             self.node.create_subscription(
                 Odometry, f"{prefix}/odom",
                 lambda message, rid=robot: self._odom(rid, message), 10,
+            )
+            self.node.create_subscription(
+                TFMessage, f"{prefix}/tf",
+                lambda message, rid=robot: self._transforms(rid, message, False), 50,
+            )
+            self.node.create_subscription(
+                TFMessage, f"{prefix}/tf_static",
+                lambda message, rid=robot: self._transforms(rid, message, True), 50,
             )
 
         self.params = self._prepare_nav2_params()
@@ -494,6 +504,50 @@ class Nav2Bridge:
                 > 0.04
             ):
                 rt.trace.append([current["x"], current["y"]])
+
+    def _transforms(self, robot, message, static):
+        """Track only transform metadata; diagnostics never receive raw ROS objects."""
+        now = time.time()
+        updates = {}
+        for transform in message.transforms:
+            parent = transform.header.frame_id.lstrip("/")
+            child = transform.child_frame_id.lstrip("/")
+            if parent and child:
+                updates[f"{parent}->{child}"] = {
+                    "parent": parent,
+                    "child": child,
+                    "observed": now,
+                    "static": bool(static),
+                }
+        with self.data_lock:
+            rt = self._rt(robot)
+            rt.transform_edges.update(updates)
+
+    def transform_health(self, robot="robot_1"):
+        """Return bounded availability/freshness for the normal Nav2 frame chain."""
+        now = time.time()
+        with self.data_lock:
+            edges = {
+                key: dict(value)
+                for key, value in self._rt(robot).transform_edges.items()
+            }
+        required = []
+        for key in ("map->odom", "odom->base_footprint", "base_footprint->base_link"):
+            item = edges.get(key)
+            age = None if item is None else max(0.0, now - item["observed"])
+            available = bool(item and (item["static"] or age <= 1.5))
+            required.append({
+                "edge": key,
+                "available": available,
+                "age_seconds": None if age is None else round(age, 3),
+                "static": bool(item and item["static"]),
+            })
+        return {
+            "robot_id": robot,
+            "required": required,
+            "all_available": all(item["available"] for item in required),
+            "observed": now,
+        }
 
     @staticmethod
     def _rate(samples, window=2.0):

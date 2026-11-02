@@ -95,9 +95,14 @@ def test_free_text_model_retry_does_not_pollute_next_diagnosis_context(tmp_path)
                     "function": {
                         "name": "finish_diagnosis",
                         "arguments": (
-                            '{"cause":"scan_interrupted","summary":"链路中断",'
-                                f'"evidence_ids":["{evidence_id}"],'
-                                '"repair_rationale":"恢复转发"}'
+                            '{"classification":"known_fault",'
+                            '"known_cause":"scan_interrupted",'
+                            '"suspected_subsystem":"sensor_pipeline",'
+                            '"summary":"链路中断",'
+                            f'"cited_evidence":["{evidence_id}"],'
+                            '"ruled_out":[],"repair_requested":true,'
+                            '"requested_repair":"restore_scan_forwarding",'
+                            '"recommended_action":"恢复转发"}'
                         ),
                     },
                 }],
@@ -323,7 +328,15 @@ class FabricatedEvidence:
                 "type": "function",
                 "function": {
                     "name": "finish_diagnosis",
-                    "arguments": '{"cause":"scan_interrupted","summary":"test","repair_rationale":"test","evidence_ids":["E999"]}',
+                    "arguments": (
+                        '{"classification":"known_fault",'
+                        '"known_cause":"scan_interrupted",'
+                        '"suspected_subsystem":"sensor_pipeline",'
+                        '"summary":"test","cited_evidence":["E999"],'
+                        '"ruled_out":[],"repair_requested":true,'
+                        '"requested_repair":"restore_scan_forwarding",'
+                        '"recommended_action":"test"}'
+                    ),
                 },
             }],
         }, {}
@@ -903,3 +916,71 @@ def test_single_robot_fault_path_emits_v2_timeline_and_restores_task(tmp_path):
         validate_event(event["kind"], event["data"])
         assert event["run_id"] == result["id"]
         assert event["robot_id"] == "robot_1"
+
+
+def test_diagnostic_prompt_v1_is_frozen_to_structure_and_normal_invariants():
+    from robot_debug_lab.agents import (
+        DIAGNOSTIC_PROMPT_FINGERPRINT,
+        DIAGNOSTIC_SYSTEM_PROMPT,
+        PROMPT_VERSION,
+        TOOLS,
+    )
+
+    assert PROMPT_VERSION == "diagnostic-structure-v1-frozen"
+    assert DIAGNOSTIC_PROMPT_FINGERPRINT == (
+        "f08d7ca02688a8d2b90988739b135a962b49455a7c00da1100310e2b1898a8de"
+    )
+    assert "normal operation" in DIAGNOSTIC_SYSTEM_PROMPT.lower()
+    assert "not as a list of possible faults" in DIAGNOSTIC_SYSTEM_PROMPT.lower()
+    frozen_payload = json.dumps(
+        {"system": DIAGNOSTIC_SYSTEM_PROMPT, "tools": TOOLS}, ensure_ascii=False
+    ).lower()
+    for targeted_hint in (
+        "tf_disconnected", "map->odom", "missing_edge", "zero-rate",
+        "supports scan_interrupted", "supports navigator_inactive",
+    ):
+        assert targeted_hint not in frozen_payload
+
+
+def test_tools_llm_can_report_unknown_without_matching_rule_infer(tmp_path):
+    class UnknownModel:
+        def complete(self, messages, tools):
+            initial = json.loads(messages[1]["content"])["initial_evidence"]
+            arguments = {
+                "classification": "unknown_fault",
+                "known_cause": None,
+                "suspected_subsystem": "planner",
+                "summary": "导航失败，但现有证据不符合已知白名单机制。",
+                "cited_evidence": [initial["id"]],
+                "ruled_out": [],
+                "repair_requested": False,
+                "requested_repair": None,
+                "recommended_action": "升级人工检查规划器现场状态。",
+            }
+            return {
+                "role": "assistant",
+                "tool_calls": [{
+                    "id": "finish",
+                    "type": "function",
+                    "function": {
+                        "name": "finish_diagnosis",
+                        "arguments": json.dumps(arguments, ensure_ascii=False),
+                    },
+                }],
+            }, {"prompt_tokens": 20, "completion_tokens": 10}
+
+    store = Store(tmp_path / "unknown-free-diagnosis.sqlite")
+    run = store.new("robot_1", "ai", "调查未知导航失败")
+    run["baseline"] = {"success": False, "message": "navigation_timeout"}
+    result = RobotAgent(
+        Observations(), store, model=UnknownModel(), robot="robot_1"
+    ).diagnose(run, threading.Event())
+
+    # The deterministic rule would call this scan_interrupted, but the
+    # diagnosis layer now validates evidence provenance rather than equality
+    # with infer(). Repair authorization remains a separate later decision.
+    assert infer(Observations().snapshot("robot_1"), {}) == "scan_interrupted"
+    assert result["classification"] == "unknown_fault"
+    assert result["known_cause"] is None
+    assert result["cause"] == "unknown"
+    assert result["repair_requested"] is False

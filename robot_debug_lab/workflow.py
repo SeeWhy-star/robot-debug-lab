@@ -3,7 +3,7 @@ from copy import deepcopy
 from .agents import RobotAgent, Canceled, infer
 from .config import robot_id, ROBOTS, AGENT_BACKEND, MODEL, OPENFANG_MODEL
 from .contracts import (
-    PROMPT_VERSION_UNFROZEN,
+    DIAGNOSTIC_PROMPT_VERSION,
     TERMINAL_PHASES,
     diagnosis_from_legacy,
     navigation_attempt_data,
@@ -73,7 +73,7 @@ class Workflow:
                     r.update(backend="rules" if mode == "rules" else AGENT_BACKEND,
                              model=("none" if mode == "rules" else
                                     (OPENFANG_MODEL if AGENT_BACKEND == "openfang" else MODEL)),
-                             prompt_version=PROMPT_VERSION_UNFROZEN,
+                             prompt_version=DIAGNOSTIC_PROMPT_VERSION,
                              target=[task.x, task.y],
                              task_type="navigation" if plan else "diagnosis")
                     if plan:

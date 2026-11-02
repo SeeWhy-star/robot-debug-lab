@@ -72,10 +72,15 @@ def test_remote_diagnostic_roundtrip_and_cleanup(tmp_path):
             call = {
                 "name": "finish_diagnosis",
                 "arguments": {
-                    "cause": "scan_interrupted",
+                    "classification": "known_fault",
+                    "known_cause": "scan_interrupted",
+                    "suspected_subsystem": "sensor_pipeline",
                     "summary": "原始雷达有数据，Nav2 输入为零。",
-                    "repair_rationale": "恢复受控雷达转发并复测。",
-                    "evidence_ids": [initial["id"], evidence[0]["id"]],
+                    "cited_evidence": [initial["id"], evidence[0]["id"]],
+                    "ruled_out": [],
+                    "repair_requested": True,
+                    "requested_repair": "restore_scan_forwarding",
+                    "recommended_action": "恢复受控雷达转发并复测。",
                 },
             }
         return httpx.Response(

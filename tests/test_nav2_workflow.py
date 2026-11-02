@@ -78,10 +78,15 @@ class InvestigatingModel:
             "finish_diagnosis",
             "finish",
             {
-                "cause": "scan_interrupted",
+                "classification": "known_fault",
+                "known_cause": "scan_interrupted",
+                "suspected_subsystem": "sensor_pipeline",
                 "summary": "原始雷达保持 10 Hz，但 Nav2 输入为 0 Hz，导航链路中断。",
-                "evidence_ids": evidence_ids,
-                "repair_rationale": "恢复受控雷达转发，再重放同一导航任务。",
+                "cited_evidence": evidence_ids,
+                "ruled_out": [],
+                "repair_requested": True,
+                "requested_repair": "restore_scan_forwarding",
+                "recommended_action": "恢复受控雷达转发，再重放同一导航任务。",
             },
         ), {}
 
@@ -470,10 +475,23 @@ class MechanismModel:
             "finish_diagnosis",
             "finish",
             {
-                "cause": self.cause,
+                "classification": "known_fault",
+                "known_cause": self.cause,
+                "suspected_subsystem": {
+                    "navigator_inactive": "nav2_lifecycle",
+                    "controller_velocity_zero": "controller",
+                    "localization_drift": "localization",
+                }[self.cause],
                 "summary": "现场机制证据与该故障一致。",
-                "evidence_ids": evidence_ids,
-                "repair_rationale": "执行对应的白名单恢复并重放原任务。",
+                "cited_evidence": evidence_ids,
+                "ruled_out": [],
+                "repair_requested": True,
+                "requested_repair": {
+                    "navigator_inactive": "resume_nav2_lifecycle",
+                    "controller_velocity_zero": "restore_controller_velocity_limits",
+                    "localization_drift": "reseed_amcl_from_gazebo_truth",
+                }[self.cause],
+                "recommended_action": "执行对应的白名单恢复并重放原任务。",
             },
         ), {}
 

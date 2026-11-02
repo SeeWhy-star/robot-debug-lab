@@ -1,8 +1,17 @@
 """Per-robot tool loops with separate contexts; no fault-injector access."""
 
-import json, time
+import hashlib, json, time
 import httpx
 from . import config
+from .contracts import (
+    DIAGNOSTIC_PROMPT_VERSION,
+    KNOWN_REPAIRS,
+    SUBSYSTEMS,
+    validate_diagnosis,
+    validate_diagnosis_evidence,
+)
+
+PROMPT_VERSION = DIAGNOSTIC_PROMPT_VERSION
 
 CAUSES = [
     "scan_interrupted",
@@ -12,6 +21,12 @@ CAUSES = [
     "healthy",
     "unknown",
 ]
+
+DIAGNOSTIC_SYSTEM_PROMPT = """You are the dedicated diagnostic agent for {robot_id} in a Nav2 and Gazebo robot system. The observable system contains a namespaced ROS 2 graph, sensor data paths, Nav2 lifecycle nodes, planner and controller configuration, costmaps, localization, coordinate-transform dependencies, and independent Gazebo physical truth.
+
+Use only the supplied read-only investigation tools. Normal operation has the required nodes active, related upstream and downstream observations mutually consistent, guarded parameters inside their approved operating ranges, localization aligned with independent physical truth, required navigation dependencies available and fresh, and a completed task accepted by both Nav2 and Gazebo verification. Treat these as invariants to investigate, not as a list of possible faults. Do not assume the known-cause enum is exhaustive.
+
+Base every conclusion on observed evidence from this run and cite only its E identifiers. If evidence supports an enumerated known cause, request only its schema-defined repair. If the evidence establishes a problem outside that enum, classify it as unknown_fault, identify the suspected subsystem, request no repair, and recommend human investigation. If observations cannot distinguish a fault, use insufficient_evidence. Never infer an injected label or invent tool output. Summaries, ruled-out reasons and recommendations must be concise Chinese. Finish through finish_diagnosis within 6 rounds."""
 
 
 class ModelError(RuntimeError):
@@ -38,19 +53,23 @@ TOOLS = [
     for n, d in [
         (
             "inspect_graph",
-            "Read the live Nav2 ROS node graph, sensor rates, Gazebo pose, AMCL pose, and their measured localization error.",
+            "Read the namespaced ROS node graph and current navigation observations.",
         ),
         (
             "read_parameters",
-            "Read guarded laser input, Nav2 lifecycle state, and controller velocity limits.",
+            "Read guarded navigation lifecycle and controller configuration.",
         ),
         (
             "sample_motion",
-            "Sample observed pose twice and measure displacement. A stationary robot alone is not proof of fault.",
+            "Sample physical pose twice and report measured displacement.",
         ),
         (
             "measure_topics",
-            "Measure raw laser data and the laser stream delivered to Nav2. Use this to distinguish a dead sensor from an interrupted data path.",
+            "Measure related upstream and downstream sensor stream rates.",
+        ),
+        (
+            "inspect_transforms",
+            "Read availability and freshness of the coordinate transforms required by this robot's navigation stack.",
         ),
     ]
 ]
@@ -63,17 +82,65 @@ TOOLS.append(
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "cause": {"type": "string", "enum": CAUSES},
+                    "classification": {
+                        "type": "string",
+                        "enum": [
+                            "known_fault", "unknown_fault",
+                            "insufficient_evidence", "healthy",
+                        ],
+                    },
+                    "known_cause": {
+                        "type": ["string", "null"],
+                        "enum": [*KNOWN_REPAIRS, None],
+                    },
+                    "suspected_subsystem": {
+                        "type": "string", "enum": sorted(SUBSYSTEMS),
+                    },
                     "summary": {"type": "string"},
-                    "evidence_ids": {"type": "array", "items": {"type": "string"}},
-                    "repair_rationale": {"type": "string"},
+                    "cited_evidence": {
+                        "type": "array", "items": {"type": "string"},
+                    },
+                    "ruled_out": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "hypothesis": {"type": "string"},
+                                "reason": {"type": "string"},
+                                "evidence_ids": {
+                                    "type": "array", "items": {"type": "string"},
+                                },
+                            },
+                            "required": ["hypothesis", "reason", "evidence_ids"],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "repair_requested": {"type": "boolean"},
+                    "requested_repair": {
+                        "type": ["string", "null"],
+                        "enum": [*KNOWN_REPAIRS.values(), None],
+                    },
+                    "recommended_action": {"type": "string"},
                 },
-                "required": ["cause", "summary", "evidence_ids", "repair_rationale"],
+                "required": [
+                    "classification", "known_cause", "suspected_subsystem",
+                    "summary", "cited_evidence", "ruled_out",
+                    "repair_requested", "requested_repair", "recommended_action",
+                ],
                 "additionalProperties": False,
             },
         },
     }
 )
+
+DIAGNOSTIC_PROMPT_FINGERPRINT = hashlib.sha256(
+    json.dumps(
+        {"system_prompt_template": DIAGNOSTIC_SYSTEM_PROMPT, "tools": TOOLS},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+).hexdigest()
 
 
 class CompatibleModel:
@@ -131,6 +198,8 @@ class RobotAgent:
             data = self.bridge.sample(rid)
         elif name == "measure_topics":
             data = self.bridge.topic_health(rid)
+        elif name == "inspect_transforms":
+            data = self.bridge.transform_health(rid)
         else:
             raise ValueError("Unknown read-only tool")
         event = self.store.event_v2(r, "tool_call", name, {
@@ -190,7 +259,7 @@ class RobotAgent:
                 evidence_ids=[initial["id"], p["id"]],
                 repair_rationale="根据节点、连接关系与参数匹配固定规则。",
             )
-        system = f"""You are the dedicated diagnostic agent for {r["robot_id"]} in a real Nav2 + Gazebo simulation. Investigate failed navigation using only observed evidence. Distinguish mechanisms: a live raw /scan with zero-rate /scan_faulted supports scan_interrupted; bt_navigator not active supports navigator_inactive; controller FollowPath vx_max=0 and vx_min=0 supports controller_velocity_zero; localization_health.status=drifted with a measured AMCL-versus-Gazebo position error at or above its threshold supports localization_drift. Use inspect_graph, measure_topics, read_parameters and sample_motion as needed. Never infer a hidden injected label. Cite only actual E identifiers. Different causes require their matching evidence and repair rationale. Summaries and rationale must be Chinese. Finish with finish_diagnosis; use unknown if evidence is insufficient. At most 6 rounds."""
+        system = DIAGNOSTIC_SYSTEM_PROMPT.format(robot_id=r["robot_id"])
         messages = [
             {
                 "role": "system",
@@ -289,42 +358,48 @@ class RobotAgent:
                     args = json.loads(call["function"].get("arguments", "{}"))
                     if name == "finish_diagnosis":
                         required = {
-                            "cause",
+                            "classification",
+                            "known_cause",
+                            "suspected_subsystem",
                             "summary",
-                            "evidence_ids",
-                            "repair_rationale",
+                            "cited_evidence",
+                            "ruled_out",
+                            "repair_requested",
+                            "requested_repair",
+                            "recommended_action",
                         }
                         if (
                             not isinstance(args, dict)
                             or set(args) != required
-                            or args["cause"] not in CAUSES
                         ):
                             raise ValueError("Invalid diagnosis schema")
                         if (
-                            not isinstance(args["evidence_ids"], list)
-                            or not args["evidence_ids"]
-                            or any(x not in evidence for x in args["evidence_ids"])
+                            not isinstance(args["cited_evidence"], list)
+                            or not args["cited_evidence"]
+                            or any(x not in evidence for x in args["cited_evidence"])
                         ):
                             raise ValueError(
                                 "Citations must refer to observed evidence"
                             )
-                        if not all(
-                            isinstance(args[k], str) and len(args[k]) <= 4000
-                            for k in ["summary", "repair_rationale"]
-                        ):
+                        if not all(isinstance(args[k], str) and len(args[k]) <= 4000
+                                   for k in ["summary", "recommended_action"]):
                             raise ValueError("Invalid explanation")
-                        if not any(
-                            e["title"] == "read_parameters" for e in evidence.values()
-                        ):
-                            raise ValueError("Read parameters before concluding")
-                        parameter_events = [
-                            e for e in evidence.values() if e["title"] == "read_parameters"
-                        ]
-                        inferred = infer(initial["data"], parameter_events[-1]["data"])
-                        if args["cause"] != inferred:
-                            raise ValueError("Diagnosis is not supported by the observed mechanism")
-                        if not any(e["id"] in args["evidence_ids"] for e in parameter_events):
-                            raise ValueError("Cite the mechanism evidence used for diagnosis")
+                        args.update(
+                            schema_version=2,
+                            strategy="tools_llm",
+                            cause=(
+                                args["known_cause"]
+                                if args["classification"] == "known_fault"
+                                else ("healthy" if args["classification"] == "healthy" else "unknown")
+                            ),
+                            evidence_ids=list(args["cited_evidence"]),
+                            repair_rationale=args["recommended_action"],
+                        )
+                        validate_diagnosis(args)
+                        validate_diagnosis_evidence(
+                            args, r["events"], r["id"], r["robot_id"],
+                            diagnosed_at=time.time(),
+                        )
                         return args
                     if args != {}:
                         raise ValueError(
