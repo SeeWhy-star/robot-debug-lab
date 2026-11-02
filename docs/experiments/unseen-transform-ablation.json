@@ -560,7 +560,7 @@
   ],
   "metrics": {
     "contract_version": "2.0",
-    "server_time": 1793626502.861603,
+    "server_time": 1793626715.8483262,
     "sample": {
       "run_count": 6,
       "experiment_ids": [
@@ -576,11 +576,11 @@
       "notes": "每组样本量较少，结果仅描述本次受控实验"
     },
     "overall": {
-      "nav2_ok_gazebo_failed": 0,
-      "canceled": 0,
-      "failed": 0,
       "escalated": 6,
+      "canceled": 0,
       "verified": 0,
+      "failed": 0,
+      "nav2_ok_gazebo_failed": 0,
       "task_completion_rate": 0.0,
       "wrong_repairs": 0
     },
@@ -601,6 +601,8 @@
         "repairs_denied": 1,
         "wrong_repairs": 0,
         "average_tool_calls": 1.0,
+        "average_diagnostic_tool_calls": 0.0,
+        "average_authorization_tool_calls": 1.0,
         "average_investigation_seconds": 9.814,
         "average_total_tokens": 5632.0
       },
@@ -620,6 +622,8 @@
         "repairs_denied": 0,
         "wrong_repairs": 0,
         "average_tool_calls": 3.0,
+        "average_diagnostic_tool_calls": 2.0,
+        "average_authorization_tool_calls": 1.0,
         "average_investigation_seconds": 0.023,
         "average_total_tokens": 0.0
       },
@@ -639,6 +643,8 @@
         "repairs_denied": 0,
         "wrong_repairs": 0,
         "average_tool_calls": 7.5,
+        "average_diagnostic_tool_calls": 6.5,
+        "average_authorization_tool_calls": 1.0,
         "average_investigation_seconds": 13.791,
         "average_total_tokens": 27833.5
       }

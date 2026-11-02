@@ -786,6 +786,16 @@ def test_metrics_only_use_private_experiment_labels_and_keep_model_metadata(tmp_
         classification="unknown_fault", suspected_subsystem="tf"
     )
     validate_diagnosis(unseen_diag)
+    for tool, actor in [
+        ("inspect_transforms", "diagnostic_agent"),
+        ("authorize_repair_state", "repair_authorizer"),
+    ]:
+        store.event_v2(unseen, "tool_call", tool, {
+            "tool": tool, "actor": actor,
+            "input_summary": {"robot_id": "robot_1"},
+            "output_summary": {}, "evidence_id": None,
+            "duration_ms": 1, "success": True, "error": None,
+        })
     unseen.update(
         status="unresolved", phase="escalated", phase_managed=True, terminal=True,
         diagnosis=unseen_diag, model="test-model", backend="openfang",
@@ -810,6 +820,9 @@ def test_metrics_only_use_private_experiment_labels_and_keep_model_metadata(tmp_
     assert (tools["model"], tools["backend"], tools["prompt_version"]) == (
         "test-model", "openfang", "diagnostic-structure-v1-frozen"
     )
+    assert tools["average_tool_calls"] == 2.0
+    assert tools["average_diagnostic_tool_calls"] == 1.0
+    assert tools["average_authorization_tool_calls"] == 1.0
     assert "true_cause" not in json.dumps(store.get(unseen["id"]))
     assert "experiment_id" not in json.dumps(public_run(store.get(unseen["id"])))
 

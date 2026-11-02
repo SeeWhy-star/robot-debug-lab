@@ -44,6 +44,9 @@ def build_metrics(store, *, experiment_id=None, strategies=(), limit=100):
         known = [item for item in group if item["true_cause"] in KNOWN_REPAIRS]
         unseen = [item for item in group if item["true_cause"] not in KNOWN_REPAIRS]
         diagnoses = [(item["run"].get("diagnosis") or {}) for item in group]
+        tool_events = [
+            _events(item["run"], "tool_call") for item in group
+        ]
         wrong_repairs = 0
         for item in group:
             expected = KNOWN_REPAIRS.get(item["true_cause"])
@@ -94,7 +97,23 @@ def build_metrics(store, *, experiment_id=None, strategies=(), limit=100):
             ),
             "wrong_repairs": wrong_repairs,
             "average_tool_calls": _mean([
-                len(_events(item["run"], "tool_call")) for item in group
+                len(events) for events in tool_events
+            ]),
+            "average_diagnostic_tool_calls": _mean([
+                sum(
+                    (event.get("data") or {}).get("actor")
+                    in {"diagnostic_agent", "deterministic_rule"}
+                    for event in events
+                )
+                for events in tool_events
+            ]),
+            "average_authorization_tool_calls": _mean([
+                sum(
+                    (event.get("data") or {}).get("actor")
+                    == "repair_authorizer"
+                    for event in events
+                )
+                for events in tool_events
             ]),
             "average_investigation_seconds": _mean(investigation_seconds),
             "average_total_tokens": _mean([
