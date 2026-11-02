@@ -122,6 +122,7 @@ class RobotAgent:
         rid = r["robot_id"]
         if self.robot is not None and rid != self.robot:
             raise ValueError("Agent robot scope mismatch")
+        started = time.monotonic()
         if name == "inspect_graph":
             data = self.bridge.snapshot(rid)
         elif name == "read_parameters":
@@ -132,7 +133,28 @@ class RobotAgent:
             data = self.bridge.topic_health(rid)
         else:
             raise ValueError("Unknown read-only tool")
-        return self.store.event(r, "tool", name, data)
+        event = self.store.event_v2(r, "tool_call", name, {
+            "tool": name,
+            "actor": (
+                "deterministic_rule" if r.get("mode") == "rules"
+                else "diagnostic_agent"
+            ),
+            "input_summary": {"robot_id": rid},
+            "output_summary": data,
+            "evidence_id": None,
+            "duration_ms": max(0, round((time.monotonic() - started) * 1000)),
+            "success": True,
+            "error": None,
+        }, step_id=r.get("current_step_id"))
+        # The model-facing view stays compact and compatible with the v1 tool
+        # protocol while its evidence ID points at the persisted v2 event.
+        return {
+            "id": event["id"],
+            "time": event["time"],
+            "kind": "tool_call",
+            "title": name,
+            "data": data,
+        }
 
     def diagnose(self, r, cancel):
         if self.robot is not None and r["robot_id"] != self.robot:
@@ -192,13 +214,6 @@ class RobotAgent:
         for step in range(6):
             if cancel.is_set():
                 raise Canceled()
-            self.store.event(
-                r,
-                "model",
-                "模型选择下一步调查",
-                {"round": step + 1, "model": config.OPENFANG_MODEL if config.AGENT_BACKEND == "openfang" else config.MODEL,
-                 "backend": config.AGENT_BACKEND},
-            )
             try:
                 message, usage = model.complete(messages, TOOLS)
             except ModelError as error:
@@ -228,6 +243,26 @@ class RobotAgent:
                 r["usage"][k] += int(usage.get(k, 0))
             self.store.save(r)
             calls = message.get("tool_calls") or []
+            self.store.event_v2(
+                r,
+                "agent_decision",
+                "模型选择下一步调查",
+                {
+                    "agent": "diagnostic",
+                    "mode": "tools_llm",
+                    "round": step + 1,
+                    "requested_tools": [
+                        call.get("function", {}).get("name", "invalid")
+                        for call in calls
+                    ],
+                    "reason_summary": "模型按现场证据选择下一步只读调查。",
+                    "usage_delta": {
+                        "prompt_tokens": int(usage.get("prompt_tokens", 0)),
+                        "completion_tokens": int(usage.get("completion_tokens", 0)),
+                    },
+                },
+                step_id=r.get("current_step_id"),
+            )
             if not calls:
                 self.store.event(
                     r, "warning", "模型未调用调查工具，压缩上下文后重试",

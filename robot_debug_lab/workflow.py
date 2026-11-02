@@ -1,7 +1,18 @@
 import threading, concurrent.futures, time, math
 from copy import deepcopy
 from .agents import RobotAgent, Canceled, infer
-from .config import robot_id, ROBOTS, AGENT_BACKEND
+from .config import robot_id, ROBOTS, AGENT_BACKEND, MODEL, OPENFANG_MODEL
+from .contracts import (
+    PROMPT_VERSION_UNFROZEN,
+    TERMINAL_PHASES,
+    diagnosis_from_legacy,
+    navigation_attempt_data,
+    phase_for,
+    repair_authorization,
+    validate_authorization_evidence,
+    validate_diagnosis_evidence,
+    verification_data,
+)
 from .supervisor import NavigationTask
 from .traffic import FleetTrafficCoordinator
 
@@ -60,6 +71,9 @@ class Workflow:
                     r = self.store.new(task.robot_id, mode, prompt)
                     runs.append(r)
                     r.update(backend="rules" if mode == "rules" else AGENT_BACKEND,
+                             model=("none" if mode == "rules" else
+                                    (OPENFANG_MODEL if AGENT_BACKEND == "openfang" else MODEL)),
+                             prompt_version=PROMPT_VERSION_UNFROZEN,
                              target=[task.x, task.y],
                              task_type="navigation" if plan else "diagnosis")
                     if plan:
@@ -876,6 +890,87 @@ class Workflow:
                     self.cancel_events.pop(r["id"], None)
                     self.bridge.locks[rid].release()
 
+    def _record_navigation_attempt(self, r, result, stage):
+        attempts = [
+            event for event in r.get("events", [])
+            if event.get("kind") == "navigation_attempt"
+        ]
+        return self.store.event_v2(
+            r,
+            "navigation_attempt",
+            "首次导航" if stage == "initial" else "原目标重放",
+            navigation_attempt_data(
+                result, r["target"], len(attempts) + 1, stage
+            ),
+        )
+
+    def _normalize_direct_diagnosis(self, r, diagnosis):
+        strategy = "rules" if r["mode"] == "rules" else "tools_llm"
+        value = diagnosis_from_legacy(diagnosis, strategy)
+        validate_diagnosis_evidence(
+            value,
+            r["events"],
+            r["id"],
+            r["robot_id"],
+            diagnosed_at=time.time(),
+        )
+        return value
+
+    def _authorize_direct_repair(self, r, diagnosis, enabled):
+        started = time.monotonic()
+        current = self.bridge.snapshot(r["robot_id"])
+        params = self.bridge.parameters(r["robot_id"])
+        evidence = self.store.event_v2(
+            r,
+            "tool_call",
+            "修复授权器复测当前机制",
+            {
+                "tool": "authorize_repair_state",
+                "actor": "repair_authorizer",
+                "input_summary": {"robot_id": r["robot_id"]},
+                "output_summary": {"snapshot": current, "parameters": params},
+                "evidence_id": None,
+                "duration_ms": max(0, round((time.monotonic() - started) * 1000)),
+                "success": True,
+                "error": None,
+            },
+        )
+        authorization = repair_authorization(
+            diagnosis,
+            infer(current, params),
+            [evidence["id"]],
+            enabled=enabled,
+        )
+        validate_authorization_evidence(
+            authorization, r["events"], r["id"], r["robot_id"]
+        )
+        r["repair_authorization"] = authorization
+        self.store.event_v2(
+            r, "repair_authorization", "确定性修复授权结果", authorization
+        )
+        return authorization
+
+    def _verify_direct_navigation(self, r, result):
+        self.store.transition(
+            r, "verifying", "nav2_attempt_finished", activity="gazebo_acceptance"
+        )
+        verification = verification_data(result)
+        r["validation"] = result
+        self.store.event_v2(
+            r, "verification", "Gazebo 独立位置验收", verification
+        )
+        if verification["gazebo_success"]:
+            r["status"] = "verified"
+            self.store.transition(r, "verified", "gazebo_acceptance_passed")
+        elif verification["nav2_success"]:
+            r["status"] = "unresolved"
+            self.store.transition(
+                r, "nav2_ok_gazebo_failed", "gazebo_acceptance_failed"
+            )
+        else:
+            return False
+        return True
+
     def run(self, r, repair, cancel):
         rid = r["robot_id"]
         try:
@@ -889,67 +984,108 @@ class Workflow:
             if cancel.is_set():
                 raise Canceled()
             if r.get("plan"):
-                self.store.event(r, "plan", "Assistant 任务分派", r["plan"])
+                self.store.event_v2(r, "plan", "Assistant 任务分派", {
+                    "plan_id": r["plan"].get("id", "unknown"),
+                    "plan_type": "single",
+                    "planner_backend": r.get("planner_backend", r["backend"]),
+                    "step_count": len(r["plan"].get("steps") or [r["target"]]),
+                    "summary": str(r["plan"].get("message") or r["prompt"])[:500],
+                })
+            r["active_target"] = list(r["target"])
+            self.store.transition(r, "navigating", "initial_navigation_started")
             r["status"] = "navigating" if r["task_type"] == "navigation" else "reproducing"
             self.store.save(r)
             r["baseline"] = self.bridge.navigate(rid, *r["target"], cancel=cancel)
-            self.store.event(r, "experiment", "首次导航" if r["task_type"] == "navigation" else "原始任务复现", r["baseline"])
+            self._record_navigation_attempt(r, r["baseline"], "initial")
             if cancel.is_set():
                 raise Canceled()
-            if r["task_type"] == "navigation" and r["baseline"]["success"]:
-                r["validation"] = r["baseline"]
-                r["status"] = "verified"
-                self.store.event(r, "validation", "首次导航位置验收通过，无需修复", r["validation"])
+            if r["baseline"]["success"] or r["baseline"].get("nav2_success"):
+                self._verify_direct_navigation(r, r["baseline"])
                 return
             r["status"] = "investigating"
-            self.store.save(r)
-            diagnosis = self.agents[rid].diagnose(r, cancel)
+            self.store.transition(
+                r, "investigating", "initial_navigation_failed",
+                activity="system_diagnosis",
+            )
+            diagnosis = self._normalize_direct_diagnosis(
+                r, self.agents[rid].diagnose(r, cancel)
+            )
             r["diagnosis"] = diagnosis
-            self.store.event(r, "diagnosis", "故障判断与证据", diagnosis)
+            self.store.event_v2(r, "diagnosis", "故障判断与证据", diagnosis)
             if cancel.is_set():
                 raise Canceled()
-            if r["baseline"]["success"] and diagnosis["cause"] == "healthy":
-                r["validation"] = r["baseline"]
-                r["status"] = "verified"
-            elif not repair:
-                r["status"] = "diagnosed"
-            elif diagnosis["cause"] in ["healthy", "unknown"]:
-                r["status"] = "unresolved"
-            else:
-                # The model proposes; a fresh observation guards the concrete mutation.
-                current = self.bridge.snapshot(rid)
-                params = self.bridge.parameters(rid)
-                if cancel.is_set():
-                    raise Canceled()
-                if infer(current, params) != diagnosis["cause"]:
-                    r["status"] = "unresolved"
-                    self.store.event(r, "guard", "修复未执行：当前证据与建议不符")
-                else:
-                    r["status"] = "repairing"
-                    self.store.save(r)
-                    result = self.bridge.repair(rid, diagnosis["cause"])
-                    self.store.event(r, "repair", "执行仿真修复", result)
-                    if cancel.is_set():
-                        raise Canceled()
-                    r["status"] = "validating"
-                    self.store.save(r)
-                    r["validation"] = self.bridge.navigate(rid, *r["target"], cancel=cancel)
-                    self.store.event(r, "validation", "独立位置验收", r["validation"])
-                    r["status"] = (
-                        "verified" if r["validation"]["success"] else "unresolved"
-                    )
+            authorization = self._authorize_direct_repair(r, diagnosis, repair)
+            if cancel.is_set():
+                raise Canceled()
+            if authorization["decision"] != "authorized":
+                r["status"] = "diagnosed" if not repair else "unresolved"
+                self.store.event_v2(r, "escalation", "未执行自动修复，升级人工", {
+                    "reason": (
+                        "insufficient_evidence"
+                        if diagnosis["classification"] == "insufficient_evidence"
+                        else "authorization_denied"
+                    ),
+                    "suspected_subsystem": diagnosis["suspected_subsystem"],
+                    "summary": authorization["reason"],
+                    "cited_evidence": diagnosis["cited_evidence"],
+                    "recommended_action": diagnosis["recommended_action"],
+                    "repair_executed": False,
+                })
+                self.store.transition(r, "escalated", "repair_not_authorized")
+                return
+            r["status"] = "repairing"
+            self.store.transition(r, "repairing", "repair_authorized")
+            repair_started = time.time()
+            try:
+                result = self.bridge.repair(rid, diagnosis["known_cause"])
+                repair_error = None
+            except Exception as error:
+                result = {}
+                repair_error = str(error)[:500]
+            repair_finished = time.time()
+            self.store.event_v2(r, "repair_execution", "执行白名单修复", {
+                "operation": authorization["authorized_operation"],
+                "known_cause": diagnosis["known_cause"],
+                "started_at": repair_started,
+                "finished_at": repair_finished,
+                "success": repair_error is None,
+                "result_summary": result,
+                "error": repair_error,
+            })
+            if repair_error:
+                raise RuntimeError(repair_error)
+            if cancel.is_set():
+                raise Canceled()
+            r["status"] = "validating"
+            self.store.transition(r, "replaying", "repair_completed")
+            replay = self.bridge.navigate(rid, *r["target"], cancel=cancel)
+            self._record_navigation_attempt(r, replay, "post_repair_replay")
+            if cancel.is_set():
+                raise Canceled()
+            if not self._verify_direct_navigation(r, replay):
+                r["status"] = "failed"
+                self.store.transition(r, "failed", "replay_navigation_failed")
         except Canceled:
             r["status"] = "canceled"
-            self.store.event(r, "cancel", "用户取消任务")
+            if phase_for(r) not in TERMINAL_PHASES:
+                self.store.event_v2(r, "cancellation", "用户取消任务", {
+                    "requested_by": "user", "confirmed": True, "reason": "用户取消任务"
+                })
+                self.store.transition(r, "canceled", "user_canceled")
         except Exception as e:
             r["status"] = "failed"
             r["error"] = str(e)[:500]
-            self.store.event(r, "error", "任务未完成", {"error": r["error"]})
+            if phase_for(r) not in TERMINAL_PHASES:
+                self.store.event_v2(r, "error", "任务未完成", {
+                    "code": "workflow_error", "message": r["error"], "retryable": False
+                })
+                self.store.transition(r, "failed", "workflow_error")
         finally:
             with self.dispatch_lock:
                 if cancel.is_set():
                     r["status"] = "canceled"
-                r["finished"] = time.time()
+                r["active_target"] = None
+                r["finished"] = r.get("finished") or time.time()
                 try:
                     self.store.save(r)
                 finally:

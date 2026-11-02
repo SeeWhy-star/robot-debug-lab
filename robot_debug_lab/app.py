@@ -1,4 +1,4 @@
-import asyncio, json, os, secrets
+import asyncio, json, os, secrets, time
 from contextlib import asynccontextmanager, contextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
@@ -19,6 +19,8 @@ from .supervisor import Supervisor
 from .mission_replanner import MissionReplanner
 from .agents import ModelError
 from .fleet import FleetSupervisor, explicit_coordinates
+from .contracts import CONTRACT_VERSION, ACTIVE_TARGET_PHASES, public_run
+from .metrics import build_metrics
 
 
 @asynccontextmanager
@@ -177,16 +179,19 @@ def exclusive_fleet():
 
 @app.get("/api/state")
 def state():
-    runs = app.state.store.all()
+    runs = [public_run(run) for run in app.state.store.all()]
     active_targets = {
         run["robot_id"]: run["active_target"]
         for run in runs
         if run.get("active_target") is not None
-        and run.get("status") not in {"verified", "unresolved", "failed", "canceled", "diagnosed"}
+        and run["phase"] in ACTIVE_TARGET_PHASES
     }
     return {
+        "contract_version": CONTRACT_VERSION,
+        "server_time": time.time(),
         "robots": app.state.bridge.public(),
         "runs": runs,
+        "active_run_ids": [run["id"] for run in runs if not run["terminal"]],
         "active_targets": active_targets,
         "traffic": app.state.workflow.traffic.snapshot(),
         "plans": app.state.store.recent_plans(),
@@ -201,6 +206,22 @@ def state():
             for rid in app.state.bridge.robot_ids
         ],
     }
+
+
+@app.get("/api/metrics")
+def metrics(request: Request, limit: int = 100, experiment_id: str | None = None):
+    strategies = request.query_params.getlist("strategy")
+    allowed = {"rules", "no_tools_llm", "tools_llm"}
+    if not 1 <= limit <= 100:
+        raise HTTPException(422, "limit must be between 1 and 100")
+    if any(strategy not in allowed for strategy in strategies):
+        raise HTTPException(422, "Unknown evaluation strategy")
+    return build_metrics(
+        app.state.store,
+        experiment_id=experiment_id,
+        strategies=strategies,
+        limit=limit,
+    )
 
 
 @app.get("/api/scene/objects")
@@ -530,7 +551,7 @@ def get_run(rid: str):
     r = app.state.store.get(rid)
     if not r:
         raise HTTPException(404, "Run not found")
-    return r
+    return public_run(r)
 
 
 @app.get("/api/runs/{rid}/export")

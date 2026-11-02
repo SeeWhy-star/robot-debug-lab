@@ -874,9 +874,11 @@ class Nav2Bridge:
         try:
             handle = self._wait(rt.client.send_goal_async(goal), 5)
         except (TimeoutError, RuntimeError):
-            return self.verdict(robot, x, y, start, "navigate_action_unavailable")
+            return self.verdict(
+                robot, x, y, start, "navigate_action_unavailable", nav2_success=False
+            )
         if not handle.accepted:
-            return self.verdict(robot, x, y, start, "goal_rejected")
+            return self.verdict(robot, x, y, start, "goal_rejected", nav2_success=False)
         rt.active_goal = handle
         result_future = handle.get_result_async()
         try:
@@ -884,18 +886,22 @@ class Nav2Bridge:
             while not result_future.done() and time.monotonic() < deadline:
                 if cancel and cancel.is_set():
                     self.stop(robot)
-                    return self.verdict(robot, x, y, start, "canceled")
+                    return self.verdict(robot, x, y, start, "canceled", nav2_success=False)
                 time.sleep(0.1)
             if not result_future.done():
                 self.stop(robot)
-                return self.verdict(robot, x, y, start, "navigation_timeout")
+                return self.verdict(
+                    robot, x, y, start, "navigation_timeout", nav2_success=False
+                )
             wrapped = result_future.result()
             message = getattr(wrapped.result, "error_msg", "") or str(wrapped.status)
-            return self.verdict(robot, x, y, start, message)
+            return self.verdict(
+                robot, x, y, start, message, nav2_success=int(wrapped.status) == 4
+            )
         finally:
             rt.active_goal = None
 
-    def verdict(self, robot, x, y, start, message):
+    def verdict(self, robot, x, y, start, message, nav2_success=None):
         rt = self._rt(robot)
         with self.data_lock:
             pose = dict(rt.ground_truth or rt.pose or {})
@@ -903,6 +909,10 @@ class Nav2Bridge:
         fresh = time.time() - pose.get("observed", 0) < 2
         return {
             "success": bool(fresh and error < 0.35),
+            "nav2_success": (
+                bool(fresh and error < 0.35)
+                if nav2_success is None else bool(nav2_success)
+            ),
             "error": round(error, 4),
             "elapsed": round(time.monotonic() - start, 2),
             "target": [x, y],
