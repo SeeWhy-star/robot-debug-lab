@@ -10,6 +10,10 @@
 - 现有 `status`、事件 `id/time/kind/title/data` 和 `/api/state` 字段保持可用。
 - 新字段只做追加；未升级的前端可以忽略它们。
 
+### 两天冲刺的实现范围
+
+本文保留长期完整契约，但第二步只要求“单机器人导航失败 → 诊断 → 授权 → 修复或升级 → 原目标重放 → run级验收”产生全部v2规范事件。多步骤任务、车队、接替、交通和空间目标本轮只需在 `/api/state` 中暴露正确 `phase`；它们继续产生legacy事件，前端使用通用卡片兜底。非核心路径的phase允许由legacy `status`和当前步骤在API序列化时兼容映射，不要求重写所有工作流分支。
+
 除特别说明外，时间戳均为 Unix seconds（UTC），ID 均为服务端生成的不透明字符串。所有写接口继续要求 `X-Lab-Token`，所有 API 继续只允许本机访问。
 
 ## 1. 版本和兼容原则
@@ -109,6 +113,7 @@ canceled
 planned
   ├─> navigating
   │     ├─> waiting_route ─> navigating
+  │     ├─> executing ─> navigating
   │     ├─> verifying ─> verified
   │     │                └> nav2_ok_gazebo_failed
   │     └─> investigating
@@ -120,10 +125,14 @@ planned
   │           │                  │                └> nav2_ok_gazebo_failed
   │           │                  └─> investigating
   │           └─> navigating  (受限路线重规划后)
-  └─> executing ─> verifying ─> verified
+  └─> executing
+          ├─> navigating
+          └─> verifying ─> verified
 ```
 
 任何非终态均可转换到 `failed` 或 `canceled`。服务器重启中断的旧 run 保持 legacy `status="interrupted"`，v2 `phase="failed"`，`phase_context.reason="server_restarted"`。
+
+多步骤任务可以在 `navigating` 与 `executing` 之间多次往返。每一步开始或结束只更新步骤状态并产生 `step_update`（本轮实现仍可保留legacy步骤事件）；`verifying`只表示整个run的最终验收，不用于每个中间步骤。
 
 ### 2.3 每个转换发生的位置
 
@@ -242,6 +251,7 @@ planned
 ```json
 {
   "tool": "inspect_tf",
+  "actor": "diagnostic_agent",
   "input_summary": {"frames": ["map", "odom", "base_link"]},
   "output_summary": {"available": false, "missing_edge": "map->odom"},
   "evidence_id": "E7",
@@ -250,6 +260,8 @@ planned
   "error": null
 }
 ```
+
+`actor` 枚举为 `diagnostic_agent | deterministic_rule | repair_authorizer | deterministic_preflight`。诊断Agent只能引用在其诊断结束前已经存在的证据；不能引用随后由 `repair_authorizer` 产生的证据。
 
 工具输出必须经过后端压缩和脱敏；不得把任意日志、模型密钥或故障注入标签放入事件。
 
@@ -389,11 +401,33 @@ handoff_skipped, handoff_dispatched, handoff_validation, warning, error, cancel
 1. `known_fault` 必须有 `known_cause`，其余 classification 的 `known_cause` 必须为 `null`。
 2. `repair_requested=true` 只允许用于 `known_fault`，并且 `requested_repair` 必须非空。
 3. `unknown_fault` 和 `insufficient_evidence` 必须 `repair_requested=false`。
-4. `tools_llm` 的 `cited_evidence` 必须全部引用当前run已存在事件；`rules`同样需要引用规则实际读取的证据。
-5. `no_tools_llm` 只能引用开始时提供的导航失败事件，不能伪造工具证据。
-6. `ruled_out` 可以为空；每项引用的证据同样必须存在。
-7. `summary/reason/recommended_action` 是面向用户的有限文本，不保存隐藏推理过程。
-8. 模型输出诊断后不再要求 `known_cause == infer()`；诊断层只做Schema、证据存在性、机器人作用域和文本长度校验。
+4. `cited_evidence` 和 `ruled_out[].evidence_ids` 只允许引用当前run、当前robot、诊断结束前已存在的 `tool_call` 或 `navigation_attempt`。
+5. `tools_llm` 可以引用上述两类事件；`rules`只能引用 `actor="deterministic_rule"` 的 `tool_call` 和 `navigation_attempt`。
+6. `no_tools_llm` 只能引用开始时提供的 `navigation_attempt`，不能引用任何 `tool_call`。引用 `phase_changed`、`warning`、其他run或其他机器人事件必须被拒绝。
+7. `ruled_out` 可以为空；每项引用遵守相同类型和作用域限制。
+8. `summary/reason/recommended_action` 是面向用户的有限文本，不保存隐藏推理过程。
+9. 模型输出诊断后不再要求 `known_cause == infer()`；诊断层只做Schema、证据类型与作用域、时序和文本长度校验。
+
+### 4.1 `no_tools_llm` 的固定输入
+
+无工具组只接收以下完整payload，不得追加现场状态：
+
+```json
+{
+  "robot_id": "robot_1",
+  "task_description": "导航到目标点",
+  "target": [2.0, 0.5],
+  "navigation_attempt": {
+    "evidence_id": "E3",
+    "nav2_success": false,
+    "nav2_status": "timeout",
+    "duration_seconds": 30.0,
+    "final_pose": [-2.0, -0.5]
+  }
+}
+```
+
+它可以使用与工具组相同的系统结构说明和正常不变量，但不能获得 `inspect_graph`、节点列表、Topic频率、lifecycle、controller参数、TF、定位偏差、`infer()`结果、故障标签或其他策略收集的证据。该payload字段集合由契约测试精确固定。
 
 ## 5. 确定性修复授权
 
@@ -535,10 +569,25 @@ handoff_skipped, handoff_dispatched, handoff_validation, warning, error, cancel
 
 ## 7. `/api/metrics`
 
-新增只读 `GET /api/metrics`。默认统计当前数据库中最近100个终态run；查询参数在第二步仅需要支持：
+实验真值不属于run。Store单独创建私有表：
+
+```sql
+CREATE TABLE experiment_labels(
+    run_id TEXT PRIMARY KEY,
+    experiment_id TEXT NOT NULL,
+    true_cause TEXT NOT NULL,
+    true_subsystem TEXT NOT NULL,
+    created REAL NOT NULL
+)
+```
+
+`Store.get`、`Store.all`、`/api/state`、`/api/runs/{id}`和run导出永远不读取或联结该表。Agent、调查工具和修复授权器没有读取权限。只有实验脚本写入标签，只有metrics聚合器读取标签。
+
+新增只读 `GET /api/metrics`。它只通过 `experiment_labels JOIN runs` 统计带标签的终态run，绝不把普通手动演示混入准确率。查询参数在第二步仅需要支持：
 
 - `limit`: `1..100`，默认100
 - `strategy`: 可重复参数，值为 `rules | no_tools_llm | tools_llm`
+- `experiment_id`: 可选精确过滤；省略时统计最近100个有标签的实验run，并在响应中列出实际包含的实验ID
 
 响应：
 
@@ -548,7 +597,9 @@ handoff_skipped, handoff_dispatched, handoff_validation, warning, error, cancel
   "server_time": 1793608000.125,
   "sample": {
     "run_count": 12,
+    "experiment_ids": ["tf-ablation-20261103"],
     "strategies": ["rules", "no_tools_llm", "tools_llm"],
+    "unlabeled_runs_excluded": 17,
     "small_sample_warning": true,
     "notes": "每组样本量较少，结果仅描述本次受控实验"
   },
@@ -564,9 +615,13 @@ handoff_skipped, handoff_dispatched, handoff_validation, warning, error, cancel
   "diagnosis_by_strategy": [
     {
       "strategy": "tools_llm",
+      "model": "configured-model-name",
+      "backend": "openfang",
+      "prompt_version": "diagnostic-structure-v1-frozen",
       "trials": 4,
       "known_fault_accuracy": 1.0,
-      "unknown_fault_detection_rate": 0.5,
+      "unknown_fault_classification_rate": 0.75,
+      "unknown_subsystem_accuracy": 0.5,
       "insufficient_evidence_rate": 0.0,
       "escalation_rate": 0.5,
       "repair_requests": 2,
@@ -596,13 +651,24 @@ handoff_skipped, handoff_dispatched, handoff_validation, warning, error, cancel
 指标定义：
 
 - `known_fault_accuracy`: 有隐藏实验真值且属于已知白名单故障的run中，`known_cause`正确的比例。
-- `unknown_fault_detection_rate`: 隐藏实验真值属于未见故障时，`classification="unknown_fault"`且疑似子系统正确的比例。
+- `unknown_fault_classification_rate`: 隐藏实验真值属于未见故障时，`classification="unknown_fault"`的比例。
+- `unknown_subsystem_accuracy`: 隐藏实验真值属于未见故障时，`suspected_subsystem`与标签表一致的比例。
 - `wrong_repairs`: 实际执行的修复与隐藏实验真值不匹配的次数；未执行修复不计错修。
 - `task_completion_rate`: `phase="verified"` 的终态run占比。
 - `gazebo_verification_rate`: 导航任务中通过Gazebo真值验收的比例。
 - `average_total_tokens`: `prompt_tokens + completion_tokens` 的组内均值；规则模式应为0。
 
-隐藏故障真值只供评测器聚合，绝不进入Agent提示词、工具输出、run公共字段或事件。前端只读取聚合指标。
+隐藏故障真值只供评测器聚合，绝不进入Agent提示词、工具输出、run公共字段或事件。前端只读取聚合指标。结果JSON与metrics分组都必须记录 `model`、`backend`、`prompt_version`和真实样本量。
+
+### 7.1 提示词冻结和实验顺序
+
+诊断提示词只描述系统结构、可用工具和正常不变量，不能出现TF断开或任何未见故障的特征、判定方法、名称暗示或修复建议。执行顺序固定为：
+
+1. 完成提示词改写和相关单元测试。
+2. 单独提交并以版本 `diagnostic-structure-v1-frozen` 标记冻结。
+3. 冻结后才实现/启用TF故障注入和未见故障评测。
+4. 评测开始后不得为提高结果修改该提示词；若必须修复协议错误，升级prompt版本并废弃此前样本，不能混合统计。
+5. TF故障进入诊断实现前必须手动复现3次并保存每次Nav2失败表现。表现不稳定时停止，不把它强行加入消融。
 
 ## 8. 前端实现约定
 
@@ -618,16 +684,19 @@ Claude前端应：
 
 ## 9. 第二步验收条件
 
-第二步实现完成时，`tests/test_contracts.py` 至少覆盖：
+第二步只规范化单机器人导航故障核心路径。多步骤、车队、接替、交通和空间路径仅要求 `/api/state` 的phase兼容映射正确，事件保留legacy。`tests/test_contracts.py` 至少覆盖：
 
 - 所有run均含合法 `phase/terminal/phase_context`。
 - 合法和非法phase转换。
-- 每个规范事件kind的必填data字段。
+- 核心路径每个规范事件kind的必填data字段。
 - 三种诊断strategy共享同一Schema。
 - 未知故障不能请求或获得修复授权。
 - 已知故障的错误修复映射被拒绝。
 - 授权使用诊断后的新鲜服务器侧证据。
+- 引用 `phase_changed`、其他run或其他机器人事件会被拒绝。
+- `no_tools_llm` 输入字段精确等于第4.1节，且只能引用 `navigation_attempt`。
 - `/api/state` 刷新可以恢复活动run和调查时间线。
-- `/api/metrics` 按strategy分组并保留真实样本量。
+- `/api/metrics` 只联结私有标签表，支持 `experiment_id`，按strategy分组并保留模型、backend、prompt版本和真实样本量。
+- 普通手动run不会进入诊断准确率。
 - 旧 `status`、旧事件envelope和现有 `/api/state` 字段仍然存在。
 
