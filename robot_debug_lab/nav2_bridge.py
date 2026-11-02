@@ -119,6 +119,11 @@ class Nav2Bridge:
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
             reliability=ReliabilityPolicy.RELIABLE,
         )
+        static_tf_qos = QoSProfile(
+            depth=100,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=ReliabilityPolicy.RELIABLE,
+        )
         for robot in self.robot_ids:
             prefix = f"/{robot}"
             runtime = SimpleNamespace(
@@ -151,6 +156,12 @@ class Nav2Bridge:
             )
             runtime.amcl_lifecycle_client = self.node.create_client(
                 GetState, f"{prefix}/amcl/get_state"
+            )
+            runtime.amcl_get_client = self.node.create_client(
+                GetParameters, f"{prefix}/amcl/get_parameters"
+            )
+            runtime.amcl_set_client = self.node.create_client(
+                SetParameters, f"{prefix}/amcl/set_parameters"
             )
             runtime.lifecycle_change_client = self.node.create_client(
                 ChangeState, f"{prefix}/bt_navigator/change_state"
@@ -192,7 +203,8 @@ class Nav2Bridge:
             )
             self.node.create_subscription(
                 TFMessage, f"{prefix}/tf_static",
-                lambda message, rid=robot: self._transforms(rid, message, True), 50,
+                lambda message, rid=robot: self._transforms(rid, message, True),
+                static_tf_qos,
             )
 
         self.params = self._prepare_nav2_params()
@@ -546,6 +558,8 @@ class Nav2Bridge:
             "robot_id": robot,
             "required": required,
             "all_available": all(item["available"] for item in required),
+            "bt_navigator_state": self.navigator_state(robot)["label"],
+            "localization_state": self.amcl_state(robot)["label"],
             "observed": now,
         }
 
@@ -587,6 +601,18 @@ class Nav2Bridge:
             "label": response.current_state.label,
         }
 
+    def amcl_state(self, robot="robot_1"):
+        rt = self._rt(robot)
+        node_name = f"/{robot}/amcl"
+        if not rt.amcl_lifecycle_client.wait_for_service(timeout_sec=2):
+            return {"node": node_name, "id": 0, "label": "unavailable"}
+        response = self._wait(rt.amcl_lifecycle_client.call_async(GetState.Request()), 3)
+        return {
+            "node": node_name,
+            "id": int(response.current_state.id),
+            "label": response.current_state.label,
+        }
+
     def controller_config(self, robot="robot_1"):
         rt = self._rt(robot)
         if not rt.controller_get_client.wait_for_service(timeout_sec=2):
@@ -619,6 +645,37 @@ class Nav2Bridge:
             reasons = [result.reason for result in response.results]
             raise RuntimeError("controller_server 拒绝参数变更：" + "; ".join(reasons))
         return self.controller_config(robot)
+
+    def _amcl_tf_broadcast(self, robot):
+        rt = self._rt(robot)
+        if not rt.amcl_get_client.wait_for_service(timeout_sec=2):
+            raise RuntimeError("AMCL 参数服务不可用")
+        request = GetParameters.Request()
+        request.names = ["tf_broadcast"]
+        response = self._wait(rt.amcl_get_client.call_async(request), 3)
+        if len(response.values) != 1:
+            raise RuntimeError("无法读取 AMCL tf_broadcast 参数")
+        return bool(response.values[0].bool_value)
+
+    def _set_amcl_tf_broadcast(self, robot, enabled):
+        rt = self._rt(robot)
+        if not rt.amcl_set_client.wait_for_service(timeout_sec=2):
+            raise RuntimeError("AMCL 参数服务不可用")
+        request = SetParameters.Request()
+        request.parameters = [ParameterMessage(
+            name="tf_broadcast",
+            value=ParameterValue(
+                type=ParameterType.PARAMETER_BOOL, bool_value=bool(enabled)
+            ),
+        )]
+        response = self._wait(rt.amcl_set_client.call_async(request), 4)
+        if len(response.results) != 1 or not response.results[0].successful:
+            reason = response.results[0].reason if response.results else "no response"
+            raise RuntimeError("AMCL 拒绝 tf_broadcast 参数变更：" + reason)
+        actual = self._amcl_tf_broadcast(robot)
+        if actual != bool(enabled):
+            raise RuntimeError("AMCL tf_broadcast 参数未生效")
+        return actual
 
     def _change_navigator(self, robot, transition_id, expected):
         rt = self._rt(robot)
@@ -734,6 +791,12 @@ class Nav2Bridge:
                 robot, injected["x"], injected["y"], injected["theta"]
             )
             self._wait_localization_near(robot, injected["x"], injected["y"])
+        elif fault == "transform_updates_stopped":
+            self.stop(robot)
+            self._set_amcl_tf_broadcast(robot, False)
+            # The mechanism is an actual stopped transform publisher. Wait
+            # beyond the normal freshness bound before reporting injection.
+            time.sleep(1.7)
         else:
             raise ValueError("不支持的 Nav2 故障类型")
         return {"applied": fault, "robot_id": robot}

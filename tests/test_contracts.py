@@ -984,3 +984,59 @@ def test_tools_llm_can_report_unknown_without_matching_rule_infer(tmp_path):
     assert result["known_cause"] is None
     assert result["cause"] == "unknown"
     assert result["repair_requested"] is False
+
+
+def test_transform_fault_stops_broadcast_without_deactivating_nav2(monkeypatch):
+    from robot_debug_lab import nav2_bridge
+    from robot_debug_lab.nav2_bridge import Nav2Bridge
+
+    bridge = Nav2Bridge.__new__(Nav2Bridge)
+    runtime = SimpleNamespace()
+    bridge._rt = lambda robot: runtime
+    stopped = []
+    changed = []
+    bridge.stop = lambda robot: stopped.append(robot)
+    bridge._set_amcl_tf_broadcast = lambda robot, enabled: changed.append(
+        (robot, enabled)
+    )
+    monkeypatch.setattr(nav2_bridge.time, "sleep", lambda _: None)
+
+    result = bridge.inject("robot_1", "transform_updates_stopped")
+
+    assert result == {
+        "applied": "transform_updates_stopped", "robot_id": "robot_1"
+    }
+    assert stopped == ["robot_1"]
+    assert changed == [("robot_1", False)]
+
+
+def test_transform_health_separates_one_stale_edge_from_active_lifecycle(monkeypatch):
+    from robot_debug_lab import nav2_bridge
+    from robot_debug_lab.nav2_bridge import Nav2Bridge
+
+    monkeypatch.setattr(nav2_bridge.time, "time", lambda: 10.0)
+    bridge = Nav2Bridge.__new__(Nav2Bridge)
+    bridge.data_lock = threading.RLock()
+    runtime = SimpleNamespace(transform_edges={
+        "map->odom": {
+            "parent": "map", "child": "odom", "observed": 8.0, "static": False,
+        },
+        "odom->base_footprint": {
+            "parent": "odom", "child": "base_footprint", "observed": 9.9,
+            "static": False,
+        },
+        "base_footprint->base_link": {
+            "parent": "base_footprint", "child": "base_link", "observed": 1.0,
+            "static": True,
+        },
+    })
+    bridge.robots = {"robot_1": runtime}
+    bridge.navigator_state = lambda robot: {"label": "active"}
+    bridge.amcl_state = lambda robot: {"label": "active"}
+
+    health = bridge.transform_health("robot_1")
+
+    assert health["all_available"] is False
+    assert [edge["available"] for edge in health["required"]] == [False, True, True]
+    assert health["bt_navigator_state"] == "active"
+    assert health["localization_state"] == "active"

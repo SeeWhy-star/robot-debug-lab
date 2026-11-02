@@ -73,7 +73,7 @@ class Diagnose(BaseModel):
 class Fault(BaseModel):
     kind: Literal[
         "scan_interrupted", "navigator_inactive", "controller_velocity_zero",
-        "localization_drift",
+        "localization_drift", "transform_updates_stopped",
     ]
 
 
@@ -238,6 +238,13 @@ def scene_object(object_id: str):
         }
     except ValueError as error:
         raise HTTPException(404, str(error)) from None
+
+
+@app.get("/api/robots/{rid}/transforms")
+def robot_transforms(rid: str):
+    if rid not in app.state.bridge.locks:
+        raise HTTPException(404, "Unknown robot")
+    return app.state.bridge.transform_health(rid)
 
 
 @app.get("/api/events")

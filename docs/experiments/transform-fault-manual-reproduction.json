@@ -1,0 +1,328 @@
+{
+  "experiment": "manual-transform-update-stop-reproduction",
+  "trials_requested": 3,
+  "target": [
+    2.0,
+    0.5
+  ],
+  "agent_used": false,
+  "diagnosis_used": false,
+  "created": 1793623269.5445015,
+  "trials": [
+    {
+      "trial": 1,
+      "healthy_transform_state": {
+        "robot_id": "robot_1",
+        "required": [
+          {
+            "edge": "map->odom",
+            "available": true,
+            "age_seconds": 0.004,
+            "static": false
+          },
+          {
+            "edge": "odom->base_footprint",
+            "available": true,
+            "age_seconds": 0.004,
+            "static": false
+          },
+          {
+            "edge": "base_footprint->base_link",
+            "available": true,
+            "age_seconds": 42.914,
+            "static": true
+          }
+        ],
+        "all_available": true,
+        "bt_navigator_state": "active",
+        "localization_state": "active",
+        "observed": 1793623144.65997
+      },
+      "fault_transform_state": {
+        "robot_id": "robot_1",
+        "required": [
+          {
+            "edge": "map->odom",
+            "available": false,
+            "age_seconds": 1.716,
+            "static": false
+          },
+          {
+            "edge": "odom->base_footprint",
+            "available": true,
+            "age_seconds": 0.023,
+            "static": false
+          },
+          {
+            "edge": "base_footprint->base_link",
+            "available": true,
+            "age_seconds": 44.626,
+            "static": true
+          }
+        ],
+        "all_available": false,
+        "bt_navigator_state": "active",
+        "localization_state": "active",
+        "observed": 1793623146.372637
+      },
+      "navigation_result": {
+        "success": false,
+        "nav2_success": false,
+        "error": 4.1231,
+        "elapsed": 0.41,
+        "target": [
+          2.0,
+          0.5
+        ],
+        "pose": {
+          "x": -1.999999903452644,
+          "y": -0.49999999999999994,
+          "theta": 9.197018792871563e-10,
+          "speed": 8.823259867232295e-21,
+          "observed": 1793623146.7789235,
+          "source": "gazebo_odometry"
+        },
+        "message": "Failed to transform end pose to global frame"
+      },
+      "wall_seconds": 0.409,
+      "post_navigation_transform_state": {
+        "robot_id": "robot_1",
+        "required": [
+          {
+            "edge": "map->odom",
+            "available": false,
+            "age_seconds": 2.13,
+            "static": false
+          },
+          {
+            "edge": "odom->base_footprint",
+            "available": true,
+            "age_seconds": 0.007,
+            "static": false
+          },
+          {
+            "edge": "base_footprint->base_link",
+            "available": true,
+            "age_seconds": 45.041,
+            "static": true
+          }
+        ],
+        "all_available": false,
+        "bt_navigator_state": "active",
+        "localization_state": "active",
+        "observed": 1793623146.7868233
+      }
+    },
+    {
+      "trial": 2,
+      "healthy_transform_state": {
+        "robot_id": "robot_1",
+        "required": [
+          {
+            "edge": "map->odom",
+            "available": true,
+            "age_seconds": 0.043,
+            "static": false
+          },
+          {
+            "edge": "odom->base_footprint",
+            "available": true,
+            "age_seconds": 0.009,
+            "static": false
+          },
+          {
+            "edge": "base_footprint->base_link",
+            "available": true,
+            "age_seconds": 8.618,
+            "static": true
+          }
+        ],
+        "all_available": true,
+        "bt_navigator_state": "active",
+        "localization_state": "active",
+        "observed": 1793623186.6261785
+      },
+      "fault_transform_state": {
+        "robot_id": "robot_1",
+        "required": [
+          {
+            "edge": "map->odom",
+            "available": false,
+            "age_seconds": 1.752,
+            "static": false
+          },
+          {
+            "edge": "odom->base_footprint",
+            "available": true,
+            "age_seconds": 0.025,
+            "static": false
+          },
+          {
+            "edge": "base_footprint->base_link",
+            "available": true,
+            "age_seconds": 10.327,
+            "static": true
+          }
+        ],
+        "all_available": false,
+        "bt_navigator_state": "active",
+        "localization_state": "active",
+        "observed": 1793623188.3349798
+      },
+      "navigation_result": {
+        "success": false,
+        "nav2_success": false,
+        "error": 4.1231,
+        "elapsed": 0.4,
+        "target": [
+          2.0,
+          0.5
+        ],
+        "pose": {
+          "x": -1.999999903452644,
+          "y": -0.49999999999999994,
+          "theta": 9.197018781060968e-10,
+          "speed": 1.2793726807486828e-20,
+          "observed": 1793623188.741694,
+          "source": "gazebo_odometry"
+        },
+        "message": "Failed to transform end pose to global frame"
+      },
+      "wall_seconds": 0.408,
+      "post_navigation_transform_state": {
+        "robot_id": "robot_1",
+        "required": [
+          {
+            "edge": "map->odom",
+            "available": false,
+            "age_seconds": 2.164,
+            "static": false
+          },
+          {
+            "edge": "odom->base_footprint",
+            "available": true,
+            "age_seconds": 0.006,
+            "static": false
+          },
+          {
+            "edge": "base_footprint->base_link",
+            "available": true,
+            "age_seconds": 10.739,
+            "static": true
+          }
+        ],
+        "all_available": false,
+        "bt_navigator_state": "active",
+        "localization_state": "active",
+        "observed": 1793623188.747335
+      }
+    },
+    {
+      "trial": 3,
+      "healthy_transform_state": {
+        "robot_id": "robot_1",
+        "required": [
+          {
+            "edge": "map->odom",
+            "available": true,
+            "age_seconds": 0.048,
+            "static": false
+          },
+          {
+            "edge": "odom->base_footprint",
+            "available": true,
+            "age_seconds": 0.014,
+            "static": false
+          },
+          {
+            "edge": "base_footprint->base_link",
+            "available": true,
+            "age_seconds": 8.605,
+            "static": true
+          }
+        ],
+        "all_available": true,
+        "bt_navigator_state": "active",
+        "localization_state": "active",
+        "observed": 1793623226.6040313
+      },
+      "fault_transform_state": {
+        "robot_id": "robot_1",
+        "required": [
+          {
+            "edge": "map->odom",
+            "available": false,
+            "age_seconds": 1.759,
+            "static": false
+          },
+          {
+            "edge": "odom->base_footprint",
+            "available": true,
+            "age_seconds": 0.032,
+            "static": false
+          },
+          {
+            "edge": "base_footprint->base_link",
+            "available": true,
+            "age_seconds": 10.316,
+            "static": true
+          }
+        ],
+        "all_available": false,
+        "bt_navigator_state": "active",
+        "localization_state": "active",
+        "observed": 1793623228.314185
+      },
+      "navigation_result": {
+        "success": false,
+        "nav2_success": false,
+        "error": 4.1231,
+        "elapsed": 0.4,
+        "target": [
+          2.0,
+          0.5
+        ],
+        "pose": {
+          "x": -1.999999903452644,
+          "y": -0.49999999999999994,
+          "theta": 9.197018781060968e-10,
+          "speed": 1.2793726807486828e-20,
+          "observed": 1793623228.7132614,
+          "source": "gazebo_odometry"
+        },
+        "message": "Failed to transform end pose to global frame"
+      },
+      "wall_seconds": 0.407,
+      "post_navigation_transform_state": {
+        "robot_id": "robot_1",
+        "required": [
+          {
+            "edge": "map->odom",
+            "available": false,
+            "age_seconds": 2.17,
+            "static": false
+          },
+          {
+            "edge": "odom->base_footprint",
+            "available": true,
+            "age_seconds": 0.012,
+            "static": false
+          },
+          {
+            "edge": "base_footprint->base_link",
+            "available": true,
+            "age_seconds": 10.727,
+            "static": true
+          }
+        ],
+        "all_available": false,
+        "bt_navigator_state": "active",
+        "localization_state": "active",
+        "observed": 1793623228.725885
+      }
+    }
+  ],
+  "model": null,
+  "backend": "manual_no_agent",
+  "prompt_version": "diagnostic-structure-v1-frozen"
+}
