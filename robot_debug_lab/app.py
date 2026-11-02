@@ -330,6 +330,8 @@ def fleet_task(q: FleetRequest):
             q.allow_handoff,
             q.traffic_wait_timeout_seconds,
         )
+        if plan["status"] == "not_executable":
+            return {"plan": plan, "run_ids": []}
         if not q.execute:
             return {"plan": plan, "run_ids": []}
         return _dispatch_fleet_plan(plan, q.recovery_mode)

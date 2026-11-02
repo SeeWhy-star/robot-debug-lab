@@ -237,6 +237,11 @@ header p {
 .assistant-result button {
   margin-left: 12px;
 }
+.assistant-error {
+  border-left-color: #e58a6f;
+  background: #392c2c;
+  color: #f2d4cb;
+}
 .panel {
   border: 1px solid #2b3c43;
   border-radius: 13px;

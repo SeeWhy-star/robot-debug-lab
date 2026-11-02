@@ -85,6 +85,8 @@ type AssistantPlan = {
     status: string;
     final_gazebo_error?: number;
   }[];
+  reason?: string;
+  suggested_requests?: string[];
 };
 type State = {
   plans?: AssistantPlan[];
@@ -253,6 +255,7 @@ function App() {
     [planning, setPlanning] = useState(false),
     [planId, setPlanId] = useState(() => localStorage.getItem("rdl.plan") || ""),
     [returnedPlan, setReturnedPlan] = useState<AssistantPlan | null>(null),
+    [assistantError, setAssistantError] = useState(""),
     [notice, setNotice] = useState("");
   useEffect(() => {
     const s = new EventSource("/api/events");
@@ -272,6 +275,7 @@ function App() {
   const assistantPlan = data?.plans?.find((p) => p.id === planId) || returnedPlan;
   const clarifying = assistantPlan?.status === "needs_clarification";
   function choosePlan(id: string) {
+    setAssistantError("");
     setPlanId(id);
     setReturnedPlan(null);
     localStorage.setItem("rdl.plan", id);
@@ -282,7 +286,7 @@ function App() {
     setMissionRepair(true);
     setInstruction(text);
   }
-  async function post(path: string, body: unknown = {}) {
+  async function post(path: string, body: unknown = {}, onError?: (message: string) => void) {
     if (!data) return;
     setBusy(true);
     setNotice("");
@@ -302,7 +306,9 @@ function App() {
         );
       return d;
     } catch (e) {
-      setNotice(String(e));
+      const message = e instanceof Error ? e.message : String(e);
+      if (onError) onError(message);
+      else setNotice(message);
       return null;
     } finally {
       setBusy(false);
@@ -318,17 +324,24 @@ function App() {
     if (d) setSelected(d.run_ids[0]);
   }
   async function executeInstruction() {
+    const parentPlan = assistantPlan;
+    setAssistantError("");
+    if (!clarifying) {
+      setPlanId("");
+      setReturnedPlan(null);
+      localStorage.removeItem("rdl.plan");
+    }
     setPlanning(true);
     try {
       const d = missionScope === "fleet"
         ? await post("/api/fleet/tasks", {
             prompt: instruction, auto_repair: missionRepair, allow_handoff: fleetHandoff,
-          })
+          }, setAssistantError)
         : await post("/api/assistant/tasks", {
             prompt: instruction, auto_repair: missionRepair,
-            parent_id: clarifying ? assistantPlan.id : null,
-            robot_id: clarifying ? assistantPlan.robot_id : robot,
-          });
+            parent_id: clarifying ? parentPlan?.id : null,
+            robot_id: clarifying ? parentPlan?.robot_id : robot,
+          }, setAssistantError);
       if (d) {
         setPlanId(d.plan.id);
         localStorage.setItem("rdl.plan", d.plan.id);
@@ -474,9 +487,18 @@ function App() {
             {planning ? "Assistant 正在解析任务…" : clarifying ? "补充并继续" : "解析并执行任务"}
           </button>
           <p className="hint">新指令只有点击上方按钮才会执行；历史下拉框只展示过去的计划。导航失败后，AI 会调查真实 ROS 状态。</p>
+          {assistantError && <div className="assistant-result assistant-error" role="alert">
+            <b>本次任务未分派</b>
+            <p>{assistantError}</p>
+            <small>机器人没有收到运动命令；可以修改指令后重试。</small>
+          </div>}
           {assistantPlan && <div className="assistant-result" role="status">
-            <b>{assistantPlan.run_ids.length ? "已分派任务" : clarifying ? "请补充指令" : assistantPlan.status === "continued" ? "已由后续补充指令接续" : "计划未执行"} · {assistantPlan.robot_id?.replace("robot_", "Robot 0") || "Robot 01"}</b>
+            <b>{assistantPlan.run_ids.length ? "已分派任务" : clarifying ? "请补充指令" : assistantPlan.status === "not_executable" ? "当前任务不可执行" : assistantPlan.status === "continued" ? "已由后续补充指令接续" : "计划未执行"} · {assistantPlan.plan_type === "fleet" ? "车队 Agent" : assistantPlan.robot_id?.replace("robot_", "Robot 0") || "Robot 01"}</b>
             <p>{assistantPlan.message}</p>
+            {!!assistantPlan.suggested_requests?.length && <div>
+              <small>可执行替代指令：</small>
+              {assistantPlan.suggested_requests.map((item) => <p key={item}>· {item}</p>)}
+            </div>}
             {!!assistantPlan.turns?.length && <details><summary>查看指令对话</summary>
               {assistantPlan.turns.map((t, i) => <p key={i}><b>{t.role === "user" ? "你" : "Assistant"}：</b>{t.content}</p>)}
             </details>}

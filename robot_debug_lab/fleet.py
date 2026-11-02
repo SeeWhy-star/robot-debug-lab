@@ -67,6 +67,20 @@ class FleetDraft(BaseModel):
         return self
 
 
+class FleetNonExecutable(BaseModel):
+    """A grounded terminal answer when no safe fleet mission can be produced."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    reason: Literal[
+        "unsupported_capability",
+        "ambiguous_request",
+        "unknown_destination",
+        "unsafe_request",
+    ]
+    message: str = Field(min_length=1, max_length=1000)
+    suggested_requests: list[str] = Field(min_length=1, max_length=3)
+
+
 def _step_schema():
     return {
         "type": "object",
@@ -115,6 +129,39 @@ FLEET_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "finish_fleet_response",
+            "description": (
+                "End without dispatch when the request cannot be grounded into the available "
+                "fleet actions. Explain the exact capability gap and offer executable alternatives."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reason": {
+                        "type": "string",
+                        "enum": [
+                            "unsupported_capability",
+                            "ambiguous_request",
+                            "unknown_destination",
+                            "unsafe_request",
+                        ],
+                    },
+                    "message": {"type": "string"},
+                    "suggested_requests": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 1,
+                        "maxItems": 3,
+                    },
+                },
+                "required": ["reason", "message", "suggested_requests"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "finish_fleet_plan",
             "description": "Return one ordered mission per selected robot.",
             "parameters": {
@@ -145,8 +192,10 @@ FLEET_TOOLS = [
 
 
 FLEET_SYSTEM = """You are a fleet task planner for exactly two robots in one Nav2 + Gazebo
-warehouse. First call get_fleet_state. Call resolve_destinations for every named place, then call
-finish_fleet_plan. Assign work using live availability, health and distance; explain the assignment
+warehouse. First call get_fleet_state. Call resolve_destinations for every named place. End with
+exactly one terminal tool: finish_fleet_plan for executable work, or finish_fleet_response when the
+request cannot be safely grounded with the available tools and actions. Assign executable work using
+live availability, health and distance; explain the assignment
 in concise Chinese. Preserve explicit robot assignments from the user. Use distinct robot_id values.
 Ground named destinations only with returned object_id values and never invent coordinates. Available
 actions are navigate, wait, return_to_start, enter_idle and simulate_charge. The warehouse has one
@@ -155,7 +204,11 @@ and simulate_charge must immediately follow navigation to charging_station. Unsu
 or manipulation must not be faked. Shell, velocity control, parameter changes and arbitrary tools are
 forbidden. Words such as 原地, 当前位置 and current position refer to the robot's live pose: wait and
 enter_idle use destination_id=null and those words are not scene destinations. Return at most eight
-steps per robot and never claim that execution already happened."""
+steps per robot and never claim that execution already happened. Computing optimal positions, searching
+the occupancy map for extrema such as the farthest reachable pair, inspection, perception and
+manipulation are unavailable unless a provided tool returns that result. For those requests, call
+finish_fleet_response promptly, state the missing capability, and suggest tasks using registered
+destinations or user-provided coordinates. Never loop, guess coordinates or silently reinterpret them."""
 
 
 class FleetSupervisor:
@@ -288,6 +341,64 @@ class FleetSupervisor:
                         args = json.loads(call["function"].get("arguments", "{}"))
                     except (TypeError, ValueError):
                         raise ModelError("车队Agent返回了无效工具参数") from None
+                    if name == "finish_fleet_response":
+                        if not fleet_observed:
+                            raise ModelError("车队答复缺少实时车队状态证据")
+                        try:
+                            response = FleetNonExecutable.model_validate(args)
+                        except ValidationError as error:
+                            messages.append({
+                                "role": "tool", "tool_call_id": call["id"],
+                                "content": json.dumps({
+                                    "accepted": False,
+                                    "errors": error.errors(
+                                        include_input=False,
+                                        include_url=False,
+                                        include_context=False,
+                                    ),
+                                }, ensure_ascii=False),
+                            })
+                            messages.append({
+                                "role": "user",
+                                "content": "答复未通过Schema，请修正后再次调用finish_fleet_response。",
+                            })
+                            retry = True
+                            break
+                        suggested_coordinates = set().union(
+                            *(
+                                explicit_coordinates(item)
+                                for item in response.suggested_requests
+                            )
+                        )
+                        if not suggested_coordinates.issubset(user_coordinates):
+                            messages.append({
+                                "role": "tool", "tool_call_id": call["id"],
+                                "content": json.dumps({
+                                    "accepted": False,
+                                    "error": (
+                                        "替代建议包含用户未提供的坐标；只能建议已登记地点，"
+                                        "或请用户自行提供明确坐标。"
+                                    ),
+                                }, ensure_ascii=False),
+                            })
+                            messages.append({
+                                "role": "user",
+                                "content": (
+                                    "不要在替代建议中猜测坐标。请改用已登记地点，"
+                                    "或明确询问用户提供坐标后再次调用finish_fleet_response。"
+                                ),
+                            })
+                            retry = True
+                            break
+                        plan.update(
+                            status="not_executable",
+                            reason=response.reason,
+                            message=response.message,
+                            suggested_requests=response.suggested_requests,
+                            usage=usage,
+                            tool_trace=trace,
+                        )
+                        return plan
                     if name == "finish_fleet_plan":
                         if not fleet_observed:
                             raise ModelError("车队计划缺少实时车队状态证据")

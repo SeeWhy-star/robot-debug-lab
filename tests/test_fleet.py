@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from robot_debug_lab.fleet import FleetSupervisor
+from robot_debug_lab.fleet import FleetSupervisor, explicit_coordinates
 from robot_debug_lab.semantic_scene import SemanticScene
 from robot_debug_lab.store import Store
 from robot_debug_lab.supervisor import Supervisor
@@ -242,6 +242,45 @@ class UnknownPlaceModel(CurrentPoseQueryModel):
         return super().complete(messages, tools)
 
 
+class UnsupportedOptimizationModel(FleetModel):
+    def complete(self, messages, tools):
+        self.round += 1
+        if self.round == 1:
+            return {
+                "role": "assistant",
+                "tool_calls": [self.call("get_fleet_state", {}, "fleet")],
+            }, {"prompt_tokens": 20, "completion_tokens": 5}
+        return {
+            "role": "assistant",
+            "tool_calls": [self.call("finish_fleet_response", {
+                "reason": "unsupported_capability",
+                "message": (
+                    "当前没有搜索占据地图最远可达点对的工具，不能安全计算或猜测坐标；"
+                    "机器人未收到运动命令。"
+                ),
+                "suggested_requests": [
+                    "让 Robot 01 去货架 A，Robot 02 去充电站",
+                    "请提供两台机器人的明确目标坐标",
+                ],
+            })],
+        }, {"prompt_tokens": 25, "completion_tokens": 12}
+
+
+class UnsafeSuggestionModel(UnsupportedOptimizationModel):
+    def complete(self, messages, tools):
+        if self.round != 1:
+            return super().complete(messages, tools)
+        self.round += 1
+        return {
+            "role": "assistant",
+            "tool_calls": [self.call("finish_fleet_response", {
+                "reason": "unsupported_capability",
+                "message": "当前没有最远可达点搜索工具。",
+                "suggested_requests": ["分别去坐标 (-4,-4) 和 (4,4)"],
+            }, "unsafe-suggestion")],
+        }, {"prompt_tokens": 10, "completion_tokens": 4}
+
+
 def make_supervisor(tmp_path, model=None):
     store = Store(tmp_path / "fleet.sqlite")
     bridge = FleetBridge()
@@ -292,6 +331,41 @@ def test_fleet_agent_still_rejects_genuinely_unknown_scene_object(tmp_path):
 
     with pytest.raises(ValueError, match="未登记地点"):
         supervisor.plan("Robot 01去月球仓库；Robot 02原地等待")
+
+
+def test_fleet_agent_ends_with_explicit_capability_gap_without_dispatch(tmp_path):
+    store, bridge, supervisor = make_supervisor(
+        tmp_path, UnsupportedOptimizationModel()
+    )
+
+    plan = supervisor.plan("两个机器人找到相互之间的最远距离")
+
+    assert plan["status"] == "not_executable"
+    assert plan["reason"] == "unsupported_capability"
+    assert plan["assignments"] == []
+    assert plan["run_ids"] == []
+    assert "最远可达点对" in plan["message"]
+    assert len(plan["suggested_requests"]) == 2
+    assert [item["name"] for item in plan["tool_trace"]] == ["get_fleet_state"]
+    assert plan["usage"] == {"prompt_tokens": 45, "completion_tokens": 17}
+    assert bridge.moves == []
+    assert store.get_plan(plan["id"])["status"] == "not_executable"
+
+
+def test_fleet_agent_rejects_guessed_coordinates_in_alternative_suggestions(tmp_path):
+    model = UnsafeSuggestionModel()
+    _, _, supervisor = make_supervisor(tmp_path, model)
+
+    plan = supervisor.plan("两个机器人找到相互之间的最远距离")
+
+    assert plan["status"] == "not_executable"
+    assert model.round == 3
+    assert all(
+        not {(-4.0, -4.0), (4.0, 4.0)} & coordinates
+        for coordinates in map(
+            explicit_coordinates, plan["suggested_requests"]
+        )
+    )
 
 
 def test_fleet_agent_cannot_invent_coordinates_not_present_in_request(tmp_path):
