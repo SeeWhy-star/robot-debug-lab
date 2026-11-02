@@ -5,4 +5,5 @@ cd "$RDL_ROOT"
 mkdir -p .runtime
 exec 9>.runtime/openfang.lock
 flock -n 9 || { echo 'Project OpenFang is already running'; exit 1; }
+printf '%s\n' "$$" >.runtime/openfang.pid
 exec .venv/bin/python scripts/start_openfang.py

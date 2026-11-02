@@ -45,6 +45,7 @@ bash scripts/start_all.sh
 ```
 
 Open <http://127.0.0.1:8765>. Use `RDL_NATIVE_GUI=1 bash scripts/start_all.sh` to show Gazebo and RViz. Configure either a direct compatible model or `RDL_AGENT_BACKEND=openfang` in `.env`; see [OpenFang setup](docs/openfang.md).
+Stop the complete project stack from any terminal with `bash scripts/stop_all.sh`. The command validates process ownership and command lines before stopping the launcher, dashboard, project-local OpenFang, Gazebo and Nav2; `--dry-run` only shows the matching processes.
 
 Run the live incident acceptance against a running server:
 

@@ -11,12 +11,29 @@ from robot_debug_lab import config
 
 
 def main():
+    launcher_pid = config.RUNTIME / "all.pid"
+    launcher_pid.write_text(f"{os.getpid()}\n")
     port = int(os.environ.get("RDL_PORT", "8765"))
     try:
-        with socket.create_connection(("127.0.0.1", port), timeout=1):
-            raise SystemExit(f"端口 {port} 已被使用。若调试台已启动，直接打开 http://127.0.0.1:{port}")
-    except OSError:
-        pass
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=1):
+                raise SystemExit(
+                    f"端口 {port} 已被使用。若调试台已启动，直接打开 "
+                    f"http://127.0.0.1:{port}；停止本项目可运行 "
+                    "bash scripts/stop_all.sh"
+                )
+        except OSError:
+            pass
+        _run_services(port)
+    finally:
+        try:
+            if launcher_pid.read_text().strip() == str(os.getpid()):
+                launcher_pid.unlink()
+        except (FileNotFoundError, OSError):
+            pass
+
+
+def _run_services(port):
     stopped = threading.Event()
     for sig in [signal.SIGINT, signal.SIGTERM]:
         signal.signal(sig, lambda *_: stopped.set())
